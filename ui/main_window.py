@@ -4,7 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Iterable
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -186,6 +187,7 @@ class MainWindow(QMainWindow):
         file_list = QListWidget()
         file_list.setObjectName("SourceFileList")
         file_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        file_list.setIconSize(QSize(112, 112))
         layout.addWidget(file_list, 1)
 
         frame.pathLabel = path_label  # type: ignore[attr-defined]
@@ -238,6 +240,16 @@ class MainWindow(QMainWindow):
         for file in files:
             item = QListWidgetItem(file.name)
             item.setToolTip(str(file))
+            suffix = file.suffix.lower()
+            if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+                pixmap = QPixmap(str(file))
+                if not pixmap.isNull():
+                    thumbnail = pixmap.scaled(
+                        file_list.iconSize(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    item.setIcon(QIcon(thumbnail))
             file_list.addItem(item)
             count += 1
         file_list.setEnabled(count > 0)
