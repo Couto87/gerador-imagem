@@ -6,6 +6,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QMessageBox
 
 from .config_manager import ConfigManager
+from .content_generator import ContentGenerationError, ContentGenerator
 from .image_manager import ImageManager
 from ui.main_window import MainWindow
 
@@ -15,6 +16,7 @@ class AppController:
         self.config_manager = ConfigManager()
         self.image_manager = ImageManager()
         self.window = MainWindow()
+        self.generator: ContentGenerator | None = None
 
         self.window.configPanel.optionChanged.connect(self._on_option_changed)
         self.window.promptSubmitted.connect(self._on_prompt_submitted)
@@ -52,12 +54,72 @@ class AppController:
         self.window.apply_config(namespace, self.config_manager.data.get(namespace, {}))
 
     def _on_prompt_submitted(self, prompt: str) -> None:
-        message = (
-            "Prompt recebido! Configure suas opções e utilize as integrações de IA "
-            "para gerar o conteúdo desejado."
-        )
-        self.window.update_right_viewer("Pronto para gerar", message)
+        item_type = str(
+            self.config_manager.get("image", "type", "Imagem")
+        ).casefold()
+
+        if item_type == "imagem":
+            message = "Função em desenvolvimento"
+            print(message)
+            self.window.update_right_viewer("Função em desenvolvimento", message)
+            self.window.clear_prompt()
+            return
+
+        if item_type in {"música", "musica"}:
+            if not prompt:
+                return
+
+            if self.generator is None:
+                try:
+                    self.generator = ContentGenerator()
+                except ContentGenerationError as error:
+                    self.window.update_right_viewer("Erro", str(error))
+                    print(f"Erro ao configurar o gerador: {error}")
+                    return
+
+            try:
+                result = self.generator.generate_music_scenes(prompt)
+            except ContentGenerationError as error:
+                self.window.update_right_viewer("Erro", str(error))
+                print(f"Erro ao gerar conteúdo: {error}")
+                return
+
+            self._print_music_result(result)
+            self.window.update_right_viewer(
+                "Conteúdo gerado",
+                "O resultado detalhado foi impresso no terminal em formato organizado.",
+            )
+            self.window.clear_prompt()
+            return
+
+        message = "Tipo de conteúdo não suportado."
+        self.window.update_right_viewer("Aviso", message)
+        print(message)
         self.window.clear_prompt()
+
+    def _print_music_result(self, payload: dict[str, object]) -> None:
+        music_title = payload.get("music_title", "")
+        print(f"3.1 - music_title: {music_title}")
+
+        scenes = payload.get("scenes", [])
+        if not isinstance(scenes, list):
+            print("Formato inesperado de cenas.")
+            return
+
+        for scene in scenes:
+            if not isinstance(scene, dict):
+                continue
+            scene_id = scene.get("scene_id")
+            lyric_excerpt = scene.get("lyric_excerpt", "")
+            image_suffix = scene_id if scene_id is not None else "desconhecido"
+            print(f"3.2 - Imagem scene_{image_suffix}.png - {lyric_excerpt}")
+
+            prompt_block = scene.get("prompt", {})
+            if isinstance(prompt_block, dict):
+                print("3.3 - Prompt:")
+                for key, value in prompt_block.items():
+                    print(f"       {key}: {value}")
+            print("-")
 
     def _on_browse_folder(self) -> None:
         start = self.image_manager.current_directory or self.image_manager.root_path
