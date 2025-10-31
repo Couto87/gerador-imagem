@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from math import ceil
 from typing import Callable, Iterable
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -33,7 +34,6 @@ class MainWindow(QMainWindow):
 
     promptSubmitted = pyqtSignal(str)
     browseFolderRequested = pyqtSignal()
-    configRequested = pyqtSignal()
 
     IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
     TEXT_EXTENSIONS = {".txt"}
@@ -45,6 +45,7 @@ class MainWindow(QMainWindow):
         self._image_icon_size = 128
         self._text_tile_width = 220
         self._selected_paths: set[str] = set()
+        self._text_lists: list[QListWidget] = []
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -53,9 +54,6 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
-        self.topbar = self._create_topbar()
-        root.addWidget(self.topbar)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
@@ -102,26 +100,6 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 3)
 
         self._apply_thumbnail_size(self._image_icon_size)
-
-    def _create_topbar(self) -> QWidget:
-        frame = QFrame()
-        frame.setObjectName("TopBar")
-        layout = QHBoxLayout(frame)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(12)
-
-        self.brandLabel = QLabel("Image Studio IA")
-        self.brandLabel.setObjectName("BrandLabel")
-        layout.addWidget(self.brandLabel)
-
-        self.pathLabel = QLabel("Pasta: —")
-        self.pathLabel.setObjectName("PathLabel")
-        layout.addWidget(self.pathLabel, 1)
-
-        self.configButton = QPushButton("Configurações")
-        self.configButton.clicked.connect(self.configRequested.emit)
-        layout.addWidget(self.configButton)
-        return frame
 
     def _create_file_panel(
         self,
@@ -189,7 +167,7 @@ class MainWindow(QMainWindow):
         image_list.setResizeMode(QListView.ResizeMode.Adjust)
         image_list.setMovement(QListView.Movement.Static)
         image_list.setWrapping(True)
-        image_list.setSpacing(4)
+        image_list.setSpacing(3)
         image_list.setWordWrap(True)
         image_list.setUniformItemSizes(False)
         layout.addWidget(image_list, 1)
@@ -199,6 +177,10 @@ class MainWindow(QMainWindow):
         frame.imageList = image_list  # type: ignore[attr-defined]
         frame.pathLabel = path_label  # type: ignore[attr-defined]
         frame.statusLabel = status  # type: ignore[attr-defined]
+
+        text_list.setVisible(False)
+        text_list.setSizeAdjustPolicy(QListView.SizeAdjustPolicy.AdjustToContents)
+        self._register_text_list(text_list)
 
         if enable_selection:
             text_list.itemDoubleClicked.connect(self._handle_source_double_click)
@@ -237,10 +219,15 @@ class MainWindow(QMainWindow):
         image_list.setResizeMode(QListView.ResizeMode.Adjust)
         image_list.setMovement(QListView.Movement.Static)
         image_list.setWrapping(True)
-        image_list.setSpacing(4)
+        image_list.setSpacing(3)
         image_list.setWordWrap(True)
         image_list.setIconSize(QSize(self._image_icon_size, self._image_icon_size))
-        image_list.setGridSize(QSize(self._image_icon_size + 20, self._image_icon_size + 32))
+        image_list.setGridSize(
+            QSize(
+                max(self._image_icon_size + 8, int(self._image_icon_size * 1.05)),
+                self._image_icon_size + 28,
+            )
+        )
         layout.addWidget(image_list, 1)
 
         remove_button = QPushButton("Remover selecionados")
@@ -257,6 +244,10 @@ class MainWindow(QMainWindow):
         widget.textList = text_list  # type: ignore[attr-defined]
         widget.imageList = image_list  # type: ignore[attr-defined]
         widget.removeButton = remove_button  # type: ignore[attr-defined]
+
+        text_list.setVisible(False)
+        text_list.setSizeAdjustPolicy(QListView.SizeAdjustPolicy.AdjustToContents)
+        self._register_text_list(text_list)
         return widget
 
     def _create_composer(self) -> QWidget:
@@ -284,9 +275,6 @@ class MainWindow(QMainWindow):
             self.promptSubmitted.emit(text)
 
     # Public helpers -----------------------------------------------------
-    def set_path_label(self, path: Path) -> None:
-        self.pathLabel.setText(f"Pasta: {path}")
-
     def set_source_folder(self, folder: Path) -> None:
         path_label = getattr(self.sourcePanel, "pathLabel", None)
         if path_label is not None:
@@ -355,6 +343,7 @@ class MainWindow(QMainWindow):
 
         image_list.setEnabled(image_count > 0)
         text_list.setEnabled(text_count > 0)
+        self._adjust_text_list_height(text_list)
         return image_count, text_count
 
     def _update_thumbnail_size(self, value: int) -> None:
@@ -365,8 +354,8 @@ class MainWindow(QMainWindow):
     def _apply_thumbnail_size(self, size: int) -> None:
         self._image_icon_size = size
         icon_extent = QSize(size, size)
-        grid_width = size + 20
-        grid_height = size + 32
+        grid_width = max(size + 8, int(size * 1.05))
+        grid_height = size + 28
 
         source_panel = getattr(self, "sourcePanel", None)
         if source_panel is not None:
@@ -477,6 +466,7 @@ class MainWindow(QMainWindow):
         else:
             if text_list is not None:
                 text_list.addItem(item)
+                self._adjust_text_list_height(text_list)
         self._selected_paths.add(path_str)
         self._refresh_selected_captions()
         self.tabs.setCurrentWidget(self.selectedTab)
@@ -499,6 +489,8 @@ class MainWindow(QMainWindow):
             if path_str in self._selected_paths:
                 self._selected_paths.remove(path_str)
         list_widget.takeItem(list_widget.row(item))
+        if list_widget in self._text_lists:
+            self._adjust_text_list_height(list_widget)
         self._refresh_selected_captions()
 
     def update_source_status(self, message: str) -> None:
@@ -526,3 +518,33 @@ class MainWindow(QMainWindow):
             if selected:
                 return Path(selected[0])
         return None
+
+    def _register_text_list(self, list_widget: QListWidget) -> None:
+        self._text_lists.append(list_widget)
+        list_widget.installEventFilter(self)
+
+    def _adjust_text_list_height(self, list_widget: QListWidget | None) -> None:
+        if list_widget is None:
+            return
+        count = list_widget.count()
+        if count == 0:
+            list_widget.setVisible(False)
+            list_widget.setFixedHeight(0)
+            return
+
+        list_widget.setVisible(True)
+        grid_size = list_widget.gridSize()
+        grid_width = grid_size.width() or list_widget.viewport().width()
+        grid_height = grid_size.height() or list_widget.sizeHintForRow(0) or 38
+
+        viewport_width = list_widget.viewport().width() or grid_width
+        columns = max(1, viewport_width // max(grid_width, 1))
+        rows = ceil(count / columns)
+        total_height = rows * grid_height + max(0, (rows - 1) * list_widget.spacing())
+        frame_padding = list_widget.frameWidth() * 2
+        list_widget.setFixedHeight(total_height + frame_padding)
+
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        if event.type() == QEvent.Type.Resize and obj in self._text_lists:
+            self._adjust_text_list_height(obj)  # type: ignore[arg-type]
+        return super().eventFilter(obj, event)

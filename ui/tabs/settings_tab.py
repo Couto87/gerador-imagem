@@ -5,14 +5,8 @@ from typing import Dict
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
 from ..config_panel import ConfigPanel
 
@@ -31,25 +25,10 @@ class SettingsTab(QWidget):
 
         self.configPanel = ConfigPanel()
         self.configPanel.optionChanged.connect(self.optionChanged)
+        self.configPanel.outputFolderBrowseRequested.connect(
+            self.outputFolderBrowseRequested.emit
+        )
         layout.addWidget(self.configPanel)
-
-        destination_title = QLabel("Destino das exportações")
-        destination_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        destination_title.setObjectName("TabTitle")
-        layout.addWidget(destination_title)
-
-        folder_row = QHBoxLayout()
-        folder_row.setSpacing(8)
-
-        self.outputFolderLabel = QLabel("Nenhuma pasta selecionada.")
-        self.outputFolderLabel.setWordWrap(True)
-        folder_row.addWidget(self.outputFolderLabel, 1)
-
-        browse_button = QPushButton("Selecionar pasta…")
-        browse_button.clicked.connect(self.outputFolderBrowseRequested.emit)
-        folder_row.addWidget(browse_button)
-
-        layout.addLayout(folder_row)
         layout.addStretch(1)
 
     def apply_config(self, namespace: str, data: Dict[str, object]) -> None:
@@ -59,7 +38,4 @@ class SettingsTab(QWidget):
         self.configPanel.apply_config(data)
 
     def set_output_folder(self, folder: Path | str | None) -> None:
-        if folder is None:
-            self.outputFolderLabel.setText("Nenhuma pasta selecionada.")
-        else:
-            self.outputFolderLabel.setText(str(folder))
+        self.configPanel.set_output_folder(folder)

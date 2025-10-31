@@ -21,7 +21,6 @@ class AppController:
         self.window.settingsTab.optionChanged.connect(self._on_option_changed)
         self.window.promptSubmitted.connect(self._on_prompt_submitted)
         self.window.browseFolderRequested.connect(self._on_browse_folder)
-        self.window.configRequested.connect(self._open_settings_tab)
         self.window.settingsTab.outputFolderBrowseRequested.connect(
             self._on_browse_output
         )
@@ -86,11 +85,6 @@ class AppController:
         self.window.settingsTab.set_output_folder(folder)
         self.config_manager.update("paths", "output_folder", str(folder))
 
-    def _open_settings_tab(self) -> None:
-        index = self.window.tabs.indexOf(self.window.settingsTab)
-        if index >= 0:
-            self.window.tabs.setCurrentIndex(index)
-
     def _select_directory(self, folder: Path) -> None:
         try:
             self.image_manager.set_current_directory(folder)
@@ -115,5 +109,4 @@ class AppController:
                 "Nenhum arquivo de imagem ou texto encontrado na pasta selecionada."
             )
         self.window.update_source_status(message)
-        self.window.set_path_label(folder)
 
