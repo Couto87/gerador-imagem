@@ -43,6 +43,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 768)
         self._image_icon_size = 128
         self._text_tile_width = 220
+        self._selected_paths: set[str] = set()
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -90,6 +91,8 @@ class MainWindow(QMainWindow):
         self.homeTab = HomeTab()
         self.settingsTab = SettingsTab()
         self.tabs.addTab(self.homeTab, "Início")
+        self.selectedTab = self._create_selected_tab()
+        self.tabs.addTab(self.selectedTab, "Selecionados")
         self.tabs.addTab(self.settingsTab, "Configurações")
         right_layout.addWidget(self.tabs, 1)
 
@@ -202,10 +205,6 @@ class MainWindow(QMainWindow):
         slider_row.addWidget(thumbnail_slider, 1)
         layout.addLayout(slider_row)
 
-        text_title = QLabel("Arquivos de texto")
-        text_title.setObjectName("SourceTextTitle")
-        layout.addWidget(text_title)
-
         text_list = QListWidget()
         text_list.setObjectName("SourceTextList")
         text_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
@@ -213,14 +212,10 @@ class MainWindow(QMainWindow):
         text_list.setResizeMode(QListView.ResizeMode.Adjust)
         text_list.setMovement(QListView.Movement.Static)
         text_list.setWrapping(True)
-        text_list.setSpacing(12)
+        text_list.setSpacing(4)
         text_list.setWordWrap(True)
-        text_list.setGridSize(QSize(self._text_tile_width, 72))
+        text_list.setGridSize(QSize(self._text_tile_width, 52))
         layout.addWidget(text_list)
-
-        image_title = QLabel("Imagens")
-        image_title.setObjectName("SourceImageTitle")
-        layout.addWidget(image_title)
 
         image_list = QListWidget()
         image_list.setObjectName("SourceImageList")
@@ -229,7 +224,7 @@ class MainWindow(QMainWindow):
         image_list.setResizeMode(QListView.ResizeMode.Adjust)
         image_list.setMovement(QListView.Movement.Static)
         image_list.setWrapping(True)
-        image_list.setSpacing(16)
+        image_list.setSpacing(8)
         image_list.setWordWrap(True)
         image_list.setUniformItemSizes(False)
         layout.addWidget(image_list, 1)
@@ -238,10 +233,47 @@ class MainWindow(QMainWindow):
         frame.textList = text_list  # type: ignore[attr-defined]
         frame.imageList = image_list  # type: ignore[attr-defined]
 
+        text_list.itemDoubleClicked.connect(self._handle_source_double_click)
+        image_list.itemDoubleClicked.connect(self._handle_source_double_click)
+
         frame.pathLabel = path_label  # type: ignore[attr-defined]
         frame.statusLabel = status  # type: ignore[attr-defined]
 
         return frame
+
+    def _create_selected_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        description = QLabel(
+            "Arquivos selecionados a partir da pasta de origem. Dê um clique duplo para removê-los."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        list_widget = QListWidget()
+        list_widget.setObjectName("SelectedFileList")
+        list_widget.setViewMode(QListView.ViewMode.IconMode)
+        list_widget.setResizeMode(QListView.ResizeMode.Adjust)
+        list_widget.setMovement(QListView.Movement.Static)
+        list_widget.setWrapping(True)
+        list_widget.setSpacing(8)
+        list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        list_widget.setIconSize(QSize(self._image_icon_size, self._image_icon_size))
+        list_widget.setGridSize(QSize(self._image_icon_size + 40, self._image_icon_size + 56))
+        layout.addWidget(list_widget, 1)
+
+        remove_button = QPushButton("Remover selecionados")
+        remove_button.clicked.connect(self._remove_selected_items)
+        layout.addWidget(remove_button)
+
+        list_widget.itemDoubleClicked.connect(self._remove_single_selected_item)
+
+        widget.listWidget = list_widget  # type: ignore[attr-defined]
+        widget.removeButton = remove_button  # type: ignore[attr-defined]
+        return widget
 
     def _create_composer(self) -> QWidget:
         frame = QFrame()
@@ -297,9 +329,11 @@ class MainWindow(QMainWindow):
         thumbnail_size = image_list.iconSize()
         for file in files:
             suffix = file.suffix.lower()
+            full_path = str(file)
             item = QListWidgetItem(file.name)
-            item.setToolTip(str(file))
+            item.setToolTip(full_path)
             item.setData(Qt.ItemDataRole.UserRole, file.name)
+            item.setData(Qt.ItemDataRole.UserRole + 1, full_path)
             item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
             if suffix in image_extensions:
                 pixmap = QPixmap(str(file))
@@ -321,6 +355,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_image_captions()
         self._refresh_text_captions()
+        self._refresh_selected_captions()
 
         if status_label is not None:
             if image_count == 0 and text_count == 0:
@@ -340,12 +375,17 @@ class MainWindow(QMainWindow):
     def _update_thumbnail_size(self, value: int) -> None:
         self._apply_thumbnail_size(value)
         self._refresh_image_captions()
+        self._refresh_selected_captions()
 
     def _apply_thumbnail_size(self, size: int) -> None:
         self._image_icon_size = size
         icon_extent = QSize(size, size)
         image_list: QListWidget | None = getattr(self.sourcePanel, "imageList", None)
         slider: QSlider | None = getattr(self.sourcePanel, "thumbnailSlider", None)
+        selected_tab = getattr(self, "selectedTab", None)
+        selected_list: QListWidget | None = (
+            getattr(selected_tab, "listWidget", None) if selected_tab is not None else None
+        )
         if image_list is None:
             if slider is not None and slider.value() != size:
                 slider.blockSignals(True)
@@ -353,9 +393,13 @@ class MainWindow(QMainWindow):
                 slider.blockSignals(False)
             return
         image_list.setIconSize(icon_extent)
-        grid_width = size + 64
-        grid_height = size + 72
+        grid_width = size + 40
+        grid_height = size + 56
         image_list.setGridSize(QSize(grid_width, grid_height))
+        if selected_list is not None:
+            selected_list.setIconSize(icon_extent)
+            selected_list.setGridSize(QSize(grid_width, grid_height))
+            selected_list.setSpacing(image_list.spacing())
         if slider is not None and slider.value() != size:
             slider.blockSignals(True)
             slider.setValue(size)
@@ -372,8 +416,18 @@ class MainWindow(QMainWindow):
         text_list: QListWidget | None = getattr(self.sourcePanel, "textList", None)
         if text_list is None:
             return
-        available_width = text_list.gridSize().width() - 16
+        available_width = text_list.gridSize().width() - 12
         self._refresh_list_labels(text_list, available_width)
+
+    def _refresh_selected_captions(self) -> None:
+        selected_tab = getattr(self, "selectedTab", None)
+        selected_list: QListWidget | None = (
+            getattr(selected_tab, "listWidget", None) if selected_tab is not None else None
+        )
+        if selected_list is None:
+            return
+        available_width = selected_list.gridSize().width() - 24
+        self._refresh_list_labels(selected_list, available_width)
 
     def _refresh_list_labels(self, list_widget: QListWidget, width: int) -> None:
         if width <= 0:
@@ -386,6 +440,74 @@ class MainWindow(QMainWindow):
                 original = item.text()
             elided = metrics.elidedText(str(original), Qt.TextElideMode.ElideMiddle, width)
             item.setText(elided)
+
+    def _handle_source_double_click(self, item: QListWidgetItem) -> None:
+        path_data = item.data(Qt.ItemDataRole.UserRole + 1)
+        if not path_data:
+            return
+        self._add_selected_file(Path(str(path_data)))
+
+    def _add_selected_file(self, path: Path) -> None:
+        selected_tab = getattr(self, "selectedTab", None)
+        selected_list: QListWidget | None = (
+            getattr(selected_tab, "listWidget", None) if selected_tab is not None else None
+        )
+        if selected_list is None:
+            return
+        path_str = str(path)
+        if path_str in self._selected_paths:
+            self.tabs.setCurrentWidget(self.selectedTab)
+            return
+
+        item = QListWidgetItem(path.name)
+        item.setData(Qt.ItemDataRole.UserRole, path.name)
+        item.setData(Qt.ItemDataRole.UserRole + 1, path_str)
+        item.setToolTip(path_str)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        image_extensions = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        if path.suffix.lower() in image_extensions:
+            pixmap = QPixmap(path_str)
+            if not pixmap.isNull():
+                thumbnail = pixmap.scaled(
+                    selected_list.iconSize(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                item.setIcon(QIcon(thumbnail))
+
+        selected_list.addItem(item)
+        self._selected_paths.add(path_str)
+        self._refresh_selected_captions()
+        self.tabs.setCurrentWidget(self.selectedTab)
+
+    def _remove_selected_items(self) -> None:
+        selected_tab = getattr(self, "selectedTab", None)
+        selected_list: QListWidget | None = (
+            getattr(selected_tab, "listWidget", None) if selected_tab is not None else None
+        )
+        if selected_list is None:
+            return
+        for item in selected_list.selectedItems():
+            self._remove_selected_item(item)
+
+    def _remove_single_selected_item(self, item: QListWidgetItem) -> None:
+        self._remove_selected_item(item)
+
+    def _remove_selected_item(self, item: QListWidgetItem) -> None:
+        selected_tab = getattr(self, "selectedTab", None)
+        selected_list: QListWidget | None = (
+            getattr(selected_tab, "listWidget", None) if selected_tab is not None else None
+        )
+        if selected_list is None:
+            return
+        path_data = item.data(Qt.ItemDataRole.UserRole + 1)
+        if path_data:
+            path_str = str(path_data)
+            if path_str in self._selected_paths:
+                self._selected_paths.remove(path_str)
+        selected_list.takeItem(selected_list.row(item))
+        self._refresh_selected_captions()
 
     def update_source_status(self, message: str) -> None:
         status_label = getattr(self.sourcePanel, "statusLabel", None)
