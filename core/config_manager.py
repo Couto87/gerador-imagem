@@ -20,6 +20,9 @@ def _default_config() -> Dict[str, Any]:
             "type": "Imagem",
         },
         "recent_folders": [],
+        "paths": {
+            "output_folder": "",
+        },
     }
 
 

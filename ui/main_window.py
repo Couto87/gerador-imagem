@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -11,6 +11,8 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QSplitter,
     QTabWidget,
@@ -20,8 +22,6 @@ from PyQt6.QtWidgets import (
 )
 
 from .config_panel import ConfigPanel
-from .sidebar import Sidebar
-from .tabs.gallery_tab import GalleryTab
 from .tabs.home_tab import HomeTab
 from .tabs.settings_tab import SettingsTab
 
@@ -31,6 +31,7 @@ class MainWindow(QMainWindow):
 
     promptSubmitted = pyqtSignal(str)
     browseFolderRequested = pyqtSignal()
+    outputBrowseRequested = pyqtSignal()
     configRequested = pyqtSignal()
 
     def __init__(self) -> None:
@@ -58,13 +59,8 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(16, 16, 12, 16)
         left_layout.setSpacing(12)
 
-        self.leftViewer = self._create_viewer("Pasta selecionada")
-        left_layout.addWidget(self.leftViewer)
-
-        self.sidebar = Sidebar()
-        self.sidebar.folderSelected.connect(self._on_folder_selected)
-        self.sidebar.browseRequested.connect(self.browseFolderRequested.emit)
-        left_layout.addWidget(self.sidebar, 1)
+        self.sourcePanel = self._create_source_panel()
+        left_layout.addWidget(self.sourcePanel, 1)
 
         splitter.addWidget(left)
 
@@ -73,7 +69,12 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(12, 16, 16, 16)
         right_layout.setSpacing(12)
 
-        self.rightViewer = self._create_viewer("Saída das imagens geradas")
+        self.rightViewer = self._create_viewer(
+            "Saída das imagens geradas",
+            browse_text="Selecionar pasta de saída…",
+            browse_slot=self.outputBrowseRequested.emit,
+            placeholder_text="Selecione uma pasta para salvar suas imagens geradas",
+        )
         right_layout.addWidget(self.rightViewer)
 
         self.configPanel = ConfigPanel()
@@ -81,10 +82,8 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.homeTab = HomeTab()
-        self.galleryTab = GalleryTab()
         self.settingsTab = SettingsTab()
         self.tabs.addTab(self.homeTab, "Início")
-        self.tabs.addTab(self.galleryTab, "Galeria")
         self.tabs.addTab(self.settingsTab, "Configurações")
         right_layout.addWidget(self.tabs, 1)
 
@@ -94,6 +93,11 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 3)
+
+        right_layout.setStretch(0, 3)
+        right_layout.setStretch(1, 1)
+        right_layout.setStretch(2, 2)
+        right_layout.setStretch(3, 1)
 
     def _create_topbar(self) -> QWidget:
         frame = QFrame()
@@ -115,7 +119,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.configButton)
         return frame
 
-    def _create_viewer(self, title: str) -> QWidget:
+    def _create_viewer(
+        self,
+        title: str,
+        *,
+        browse_text: str | None = None,
+        browse_slot: Callable[[], None] | None = None,
+        placeholder_text: str = "Selecione uma pasta para visualizar suas imagens",
+    ) -> QWidget:
         frame = QFrame()
         frame.setObjectName("Viewer")
         layout = QVBoxLayout(frame)
@@ -126,7 +137,17 @@ class MainWindow(QMainWindow):
         caption.setObjectName("ViewerTitle")
         layout.addWidget(caption)
 
-        placeholder = QLabel("Selecione uma pasta para visualizar suas imagens")
+        if browse_text and browse_slot:
+            browse_button = QPushButton(browse_text)
+            browse_button.clicked.connect(browse_slot)
+            layout.addWidget(browse_button)
+
+        path_label = QLabel("Nenhuma pasta selecionada.")
+        path_label.setObjectName("ViewerPath")
+        path_label.setWordWrap(True)
+        layout.addWidget(path_label)
+
+        placeholder = QLabel(placeholder_text)
         placeholder.setWordWrap(True)
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder.setObjectName("ViewerPlaceholder")
@@ -134,6 +155,42 @@ class MainWindow(QMainWindow):
 
         frame.captionLabel = caption  # type: ignore[attr-defined]
         frame.placeholderLabel = placeholder  # type: ignore[attr-defined]
+        frame.pathLabel = path_label  # type: ignore[attr-defined]
+        return frame
+
+    def _create_source_panel(self) -> QWidget:
+        frame = QFrame()
+        frame.setObjectName("SourcePanel")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        title = QLabel("Arquivos da pasta selecionada")
+        title.setObjectName("SourceTitle")
+        layout.addWidget(title)
+
+        browse_button = QPushButton("Escolher pasta…")
+        browse_button.clicked.connect(self.browseFolderRequested.emit)
+        layout.addWidget(browse_button)
+
+        path_label = QLabel("Nenhuma pasta selecionada.")
+        path_label.setWordWrap(True)
+        path_label.setObjectName("SourcePath")
+        layout.addWidget(path_label)
+
+        status = QLabel("Os arquivos compatíveis serão exibidos aqui.")
+        status.setWordWrap(True)
+        status.setObjectName("SourceStatus")
+        layout.addWidget(status)
+
+        file_list = QListWidget()
+        file_list.setObjectName("SourceFileList")
+        file_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        layout.addWidget(file_list, 1)
+
+        frame.pathLabel = path_label  # type: ignore[attr-defined]
+        frame.statusLabel = status  # type: ignore[attr-defined]
+        frame.fileList = file_list  # type: ignore[attr-defined]
         return frame
 
     def _create_composer(self) -> QWidget:
@@ -163,22 +220,32 @@ class MainWindow(QMainWindow):
         if text:
             self.promptSubmitted.emit(text)
 
-    def _on_folder_selected(self, folder: Path) -> None:
-        self.set_path_label(folder)
-
     # Public helpers -----------------------------------------------------
     def set_path_label(self, path: Path) -> None:
         self.pathLabel.setText(f"Pasta: {path}")
 
-    def set_directories(self, directories: Iterable[Path]) -> None:
-        self.sidebar.set_directories(directories)
+    def set_source_folder(self, folder: Path) -> None:
+        path_label = getattr(self.sourcePanel, "pathLabel", None)
+        if path_label is not None:
+            path_label.setText(str(folder))
 
-    def select_directory(self, directory: Path) -> None:
-        self.sidebar.select_folder(directory)
-        self.set_path_label(directory)
+    def set_source_files(self, files: Iterable[Path]) -> None:
+        file_list: QListWidget | None = getattr(self.sourcePanel, "fileList", None)
+        if file_list is None:
+            return
+        file_list.clear()
+        count = 0
+        for file in files:
+            item = QListWidgetItem(file.name)
+            item.setToolTip(str(file))
+            file_list.addItem(item)
+            count += 1
+        file_list.setEnabled(count > 0)
 
-    def set_gallery_images(self, images: Iterable[Path]) -> None:
-        self.galleryTab.set_images(images)
+    def update_source_status(self, message: str) -> None:
+        status_label = getattr(self.sourcePanel, "statusLabel", None)
+        if status_label is not None:
+            status_label.setText(message)
 
     def apply_config(self, namespace: str, data: dict[str, object]) -> None:
         if namespace == "image":
@@ -192,12 +259,18 @@ class MainWindow(QMainWindow):
             caption.setText(title)
         if message and placeholder is not None:
             placeholder.setText(message)
-
-    def update_left_viewer(self, title: str, message: str) -> None:
-        self.update_viewer(self.leftViewer, title=title, message=message)
-
     def update_right_viewer(self, title: str, message: str) -> None:
         self.update_viewer(self.rightViewer, title=title, message=message)
+
+    def set_output_folder(self, folder: Path) -> None:
+        path_label = getattr(self.rightViewer, "pathLabel", None)
+        if path_label is not None:
+            path_label.setText(str(folder))
+
+    def clear_output_folder(self) -> None:
+        path_label = getattr(self.rightViewer, "pathLabel", None)
+        if path_label is not None:
+            path_label.setText("Nenhuma pasta selecionada.")
 
     def prompt_text(self) -> str:
         return self.promptEdit.toPlainText()
