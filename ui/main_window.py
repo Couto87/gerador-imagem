@@ -11,10 +11,12 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListView,
     QMainWindow,
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSlider,
     QSplitter,
     QTabWidget,
     QTextEdit,
@@ -39,6 +41,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Image Studio IA")
         self.resize(1280, 768)
+        self._image_icon_size = 128
+        self._text_tile_width = 220
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -62,6 +66,7 @@ class MainWindow(QMainWindow):
 
         self.sourcePanel = self._create_source_panel()
         left_layout.addWidget(self.sourcePanel, 1)
+        self._apply_thumbnail_size(self._image_icon_size)
 
         splitter.addWidget(left)
 
@@ -184,15 +189,58 @@ class MainWindow(QMainWindow):
         status.setObjectName("SourceStatus")
         layout.addWidget(status)
 
-        file_list = QListWidget()
-        file_list.setObjectName("SourceFileList")
-        file_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
-        file_list.setIconSize(QSize(112, 112))
-        layout.addWidget(file_list, 1)
+        slider_row = QHBoxLayout()
+        slider_caption = QLabel("Tamanho das miniaturas")
+        slider_row.addWidget(slider_caption)
+        thumbnail_slider = QSlider(Qt.Orientation.Horizontal)
+        thumbnail_slider.setObjectName("SourceThumbnailSlider")
+        thumbnail_slider.setRange(80, 224)
+        thumbnail_slider.setSingleStep(8)
+        thumbnail_slider.setPageStep(16)
+        thumbnail_slider.setValue(self._image_icon_size)
+        thumbnail_slider.valueChanged.connect(self._update_thumbnail_size)
+        slider_row.addWidget(thumbnail_slider, 1)
+        layout.addLayout(slider_row)
+
+        text_title = QLabel("Arquivos de texto")
+        text_title.setObjectName("SourceTextTitle")
+        layout.addWidget(text_title)
+
+        text_list = QListWidget()
+        text_list.setObjectName("SourceTextList")
+        text_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        text_list.setViewMode(QListView.ViewMode.IconMode)
+        text_list.setResizeMode(QListView.ResizeMode.Adjust)
+        text_list.setMovement(QListView.Movement.Static)
+        text_list.setWrapping(True)
+        text_list.setSpacing(12)
+        text_list.setWordWrap(True)
+        text_list.setGridSize(QSize(self._text_tile_width, 72))
+        layout.addWidget(text_list)
+
+        image_title = QLabel("Imagens")
+        image_title.setObjectName("SourceImageTitle")
+        layout.addWidget(image_title)
+
+        image_list = QListWidget()
+        image_list.setObjectName("SourceImageList")
+        image_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        image_list.setViewMode(QListView.ViewMode.IconMode)
+        image_list.setResizeMode(QListView.ResizeMode.Adjust)
+        image_list.setMovement(QListView.Movement.Static)
+        image_list.setWrapping(True)
+        image_list.setSpacing(16)
+        image_list.setWordWrap(True)
+        image_list.setUniformItemSizes(False)
+        layout.addWidget(image_list, 1)
+
+        frame.thumbnailSlider = thumbnail_slider  # type: ignore[attr-defined]
+        frame.textList = text_list  # type: ignore[attr-defined]
+        frame.imageList = image_list  # type: ignore[attr-defined]
 
         frame.pathLabel = path_label  # type: ignore[attr-defined]
         frame.statusLabel = status  # type: ignore[attr-defined]
-        frame.fileList = file_list  # type: ignore[attr-defined]
+
         return frame
 
     def _create_composer(self) -> QWidget:
@@ -232,27 +280,112 @@ class MainWindow(QMainWindow):
             path_label.setText(str(folder))
 
     def set_source_files(self, files: Iterable[Path]) -> None:
-        file_list: QListWidget | None = getattr(self.sourcePanel, "fileList", None)
-        if file_list is None:
+        image_list: QListWidget | None = getattr(self.sourcePanel, "imageList", None)
+        text_list: QListWidget | None = getattr(self.sourcePanel, "textList", None)
+        status_label: QLabel | None = getattr(self.sourcePanel, "statusLabel", None)
+        if image_list is None or text_list is None:
             return
-        file_list.clear()
-        count = 0
+
+        image_list.clear()
+        text_list.clear()
+
+        image_extensions = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        text_extensions = {".txt"}
+        image_count = 0
+        text_count = 0
+
+        thumbnail_size = image_list.iconSize()
         for file in files:
+            suffix = file.suffix.lower()
             item = QListWidgetItem(file.name)
             item.setToolTip(str(file))
-            suffix = file.suffix.lower()
-            if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+            item.setData(Qt.ItemDataRole.UserRole, file.name)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
+            if suffix in image_extensions:
                 pixmap = QPixmap(str(file))
                 if not pixmap.isNull():
                     thumbnail = pixmap.scaled(
-                        file_list.iconSize(),
+                        thumbnail_size,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
                     item.setIcon(QIcon(thumbnail))
-            file_list.addItem(item)
-            count += 1
-        file_list.setEnabled(count > 0)
+                image_list.addItem(item)
+                image_count += 1
+            elif suffix in text_extensions:
+                text_list.addItem(item)
+                text_count += 1
+
+        image_list.setEnabled(image_count > 0)
+        text_list.setEnabled(text_count > 0)
+
+        self._refresh_image_captions()
+        self._refresh_text_captions()
+
+        if status_label is not None:
+            if image_count == 0 and text_count == 0:
+                status_label.setText("Nenhum arquivo compatível encontrado.")
+            else:
+                parts: list[str] = []
+                if image_count:
+                    parts.append(
+                        f"{image_count} imagem{'s' if image_count != 1 else ''} encontrada"
+                    )
+                if text_count:
+                    parts.append(
+                        f"{text_count} arquivo{'s' if text_count != 1 else ''} de texto"
+                    )
+                status_label.setText(" • ".join(parts))
+
+    def _update_thumbnail_size(self, value: int) -> None:
+        self._apply_thumbnail_size(value)
+        self._refresh_image_captions()
+
+    def _apply_thumbnail_size(self, size: int) -> None:
+        self._image_icon_size = size
+        icon_extent = QSize(size, size)
+        image_list: QListWidget | None = getattr(self.sourcePanel, "imageList", None)
+        slider: QSlider | None = getattr(self.sourcePanel, "thumbnailSlider", None)
+        if image_list is None:
+            if slider is not None and slider.value() != size:
+                slider.blockSignals(True)
+                slider.setValue(size)
+                slider.blockSignals(False)
+            return
+        image_list.setIconSize(icon_extent)
+        grid_width = size + 64
+        grid_height = size + 72
+        image_list.setGridSize(QSize(grid_width, grid_height))
+        if slider is not None and slider.value() != size:
+            slider.blockSignals(True)
+            slider.setValue(size)
+            slider.blockSignals(False)
+
+    def _refresh_image_captions(self) -> None:
+        image_list: QListWidget | None = getattr(self.sourcePanel, "imageList", None)
+        if image_list is None:
+            return
+        available_width = image_list.gridSize().width() - 24
+        self._refresh_list_labels(image_list, available_width)
+
+    def _refresh_text_captions(self) -> None:
+        text_list: QListWidget | None = getattr(self.sourcePanel, "textList", None)
+        if text_list is None:
+            return
+        available_width = text_list.gridSize().width() - 16
+        self._refresh_list_labels(text_list, available_width)
+
+    def _refresh_list_labels(self, list_widget: QListWidget, width: int) -> None:
+        if width <= 0:
+            return
+        metrics = list_widget.fontMetrics()
+        for index in range(list_widget.count()):
+            item = list_widget.item(index)
+            original = item.data(Qt.ItemDataRole.UserRole)
+            if original is None:
+                original = item.text()
+            elided = metrics.elidedText(str(original), Qt.TextElideMode.ElideMiddle, width)
+            item.setText(elided)
 
     def update_source_status(self, message: str) -> None:
         status_label = getattr(self.sourcePanel, "statusLabel", None)
