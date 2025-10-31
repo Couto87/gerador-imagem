@@ -16,11 +16,14 @@ class AppController:
         self.image_manager = ImageManager()
         self.window = MainWindow()
 
-        self.window.configPanel.optionChanged.connect(self._on_option_changed)
+        self.output_directory: Path | None = None
+
+        self.window.settingsTab.optionChanged.connect(self._on_option_changed)
         self.window.promptSubmitted.connect(self._on_prompt_submitted)
         self.window.browseFolderRequested.connect(self._on_browse_folder)
-        self.window.configRequested.connect(self._open_settings_tab)
-        self.window.sidebar.folderSelected.connect(self._on_folder_selected)
+        self.window.settingsTab.outputFolderBrowseRequested.connect(
+            self._on_browse_output
+        )
 
         self._initialize_state()
 
@@ -31,32 +34,39 @@ class AppController:
     def _initialize_state(self) -> None:
         image_config = self.config_manager.data.get("image", {})
         self.window.apply_config("image", image_config)
+        output_folder = self.config_manager.get("paths", "output_folder", "")
+        if isinstance(output_folder, str) and output_folder:
+            output_path = Path(output_folder)
+            if output_path.exists():
+                self.output_directory = output_path
+                self.window.settingsTab.set_output_folder(output_path)
+            else:
+                self.output_directory = None
+                self.window.settingsTab.set_output_folder(None)
+        else:
+            self.output_directory = None
+            self.window.settingsTab.set_output_folder(None)
+
         recent = self.config_manager.recent_folders()
         if recent:
-            self.window.set_directories(recent)
-            self.window.select_directory(recent[0])
-            self._load_directory(recent[0])
+            self._select_directory(recent[0])
         else:
-            self._refresh_directories()
-            self.window.update_left_viewer(
-                "Nenhuma pasta selecionada",
-                "Use o painel lateral para escolher uma pasta de imagens.",
+            self.window.set_source_files([])
+            self.window.update_source_status(
+                "Nenhuma pasta selecionada. Use o botão acima para escolher uma pasta.",
             )
-
-    def _refresh_directories(self) -> None:
-        directories = self.image_manager.list_directories()
-        self.window.set_directories(directories)
 
     def _on_option_changed(self, namespace: str, key: str, value) -> None:
         self.config_manager.update(namespace, key, value)
         self.window.apply_config(namespace, self.config_manager.data.get(namespace, {}))
 
     def _on_prompt_submitted(self, prompt: str) -> None:
-        message = (
+        QMessageBox.information(
+            self.window,
+            "Prompt recebido",
             "Prompt recebido! Configure suas opções e utilize as integrações de IA "
-            "para gerar o conteúdo desejado."
+            "para gerar o conteúdo desejado.",
         )
-        self.window.update_right_viewer("Pronto para gerar", message)
         self.window.clear_prompt()
 
     def _on_browse_folder(self) -> None:
@@ -66,13 +76,14 @@ class AppController:
             return
         self._select_directory(folder)
 
-    def _open_settings_tab(self) -> None:
-        index = self.window.tabs.indexOf(self.window.settingsTab)
-        if index >= 0:
-            self.window.tabs.setCurrentIndex(index)
-
-    def _on_folder_selected(self, folder: Path) -> None:
-        self._select_directory(folder)
+    def _on_browse_output(self) -> None:
+        start = self.output_directory or self.image_manager.root_path
+        folder = self.window.open_folder_dialog(start)
+        if folder is None:
+            return
+        self.output_directory = folder
+        self.window.settingsTab.set_output_folder(folder)
+        self.config_manager.update("paths", "output_folder", str(folder))
 
     def _select_directory(self, folder: Path) -> None:
         try:
@@ -85,13 +96,17 @@ class AppController:
             )
             return
         self.config_manager.add_recent_folder(folder)
-        self.window.set_directories(self.config_manager.recent_folders())
-        self.window.select_directory(folder)
         self._load_directory(folder)
 
     def _load_directory(self, folder: Path) -> None:
-        images = self.image_manager.list_images()
-        self.window.set_gallery_images(images)
-        message = f"{len(images)} arquivo(s) de imagem encontrado(s)"
-        self.window.update_left_viewer(folder.name or str(folder), message)
-        self.window.set_path_label(folder)
+        files = self.image_manager.list_media_files()
+        self.window.set_source_folder(folder)
+        self.window.set_source_files(files)
+        if files:
+            message = f"{len(files)} arquivo(s) encontrado(s)"
+        else:
+            message = (
+                "Nenhum arquivo de imagem ou texto encontrado na pasta selecionada."
+            )
+        self.window.update_source_status(message)
+

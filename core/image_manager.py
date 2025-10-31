@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import List, Sequence
 
 IMAGE_EXTENSIONS: Sequence[str] = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+TEXT_EXTENSIONS: Sequence[str] = (".txt",)
+MEDIA_EXTENSIONS: Sequence[str] = IMAGE_EXTENSIONS + TEXT_EXTENSIONS
 
 
 @dataclass
@@ -48,6 +50,16 @@ class ImageManager:
             file
             for file in sorted(base.iterdir())
             if file.is_file() and file.suffix.lower() in IMAGE_EXTENSIONS
+        ]
+
+    def list_media_files(self) -> List[Path]:
+        base = self.current_directory or self.root_path
+        if not base.exists():
+            return []
+        return [
+            file
+            for file in sorted(base.iterdir())
+            if file.is_file() and file.suffix.lower() in MEDIA_EXTENSIONS
         ]
 
     def latest_images(self, limit: int = 10) -> List[Path]:
