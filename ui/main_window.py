@@ -24,7 +24,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .config_panel import ConfigPanel
 from .tabs.home_tab import HomeTab
 from .tabs.settings_tab import SettingsTab
 
@@ -36,6 +35,9 @@ class MainWindow(QMainWindow):
     browseFolderRequested = pyqtSignal()
     outputBrowseRequested = pyqtSignal()
     configRequested = pyqtSignal()
+
+    IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    TEXT_EXTENSIONS = {".txt"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -64,28 +66,21 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(16, 16, 12, 16)
         left_layout.setSpacing(12)
-
-        self.sourcePanel = self._create_source_panel()
+        self.sourcePanel = self._create_file_panel(
+            title="Arquivos da pasta selecionada",
+            browse_text="Escolher pasta…",
+            browse_slot=self.browseFolderRequested.emit,
+            status_text="Os arquivos compatíveis serão exibidos aqui.",
+            object_name="SourcePanel",
+            enable_selection=True,
+        )
         left_layout.addWidget(self.sourcePanel, 1)
-        self._apply_thumbnail_size(self._image_icon_size)
-
         splitter.addWidget(left)
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(12, 16, 16, 16)
-        right_layout.setSpacing(12)
-
-        self.rightViewer = self._create_viewer(
-            "Saída das imagens geradas",
-            browse_text="Selecionar pasta de saída…",
-            browse_slot=self.outputBrowseRequested.emit,
-            placeholder_text="Selecione uma pasta para salvar suas imagens geradas",
-        )
-        right_layout.addWidget(self.rightViewer)
-
-        self.configPanel = ConfigPanel()
-        right_layout.addWidget(self.configPanel)
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(12, 16, 12, 16)
+        center_layout.setSpacing(12)
 
         self.tabs = QTabWidget()
         self.homeTab = HomeTab()
@@ -94,19 +89,36 @@ class MainWindow(QMainWindow):
         self.selectedTab = self._create_selected_tab()
         self.tabs.addTab(self.selectedTab, "Selecionados")
         self.tabs.addTab(self.settingsTab, "Configurações")
-        right_layout.addWidget(self.tabs, 1)
+        center_layout.addWidget(self.tabs, 1)
 
         composer = self._create_composer()
-        right_layout.addWidget(composer)
+        center_layout.addWidget(composer)
 
+        center_layout.setStretch(0, 3)
+        center_layout.setStretch(1, 2)
+
+        splitter.addWidget(center)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(12, 16, 16, 16)
+        right_layout.setSpacing(12)
+        self.outputPanel = self._create_file_panel(
+            title="Arquivos da pasta de destino",
+            browse_text="Selecionar pasta de saída…",
+            browse_slot=self.outputBrowseRequested.emit,
+            status_text="Os arquivos salvos serão exibidos aqui.",
+            object_name="OutputPanel",
+            enable_selection=False,
+        )
+        right_layout.addWidget(self.outputPanel, 1)
         splitter.addWidget(right)
+
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(2, 2)
 
-        right_layout.setStretch(0, 3)
-        right_layout.setStretch(1, 1)
-        right_layout.setStretch(2, 2)
-        right_layout.setStretch(3, 1)
+        self._apply_thumbnail_size(self._image_icon_size)
 
     def _create_topbar(self) -> QWidget:
         frame = QFrame()
@@ -128,75 +140,45 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.configButton)
         return frame
 
-    def _create_viewer(
+    def _create_file_panel(
         self,
-        title: str,
         *,
-        browse_text: str | None = None,
-        browse_slot: Callable[[], None] | None = None,
-        placeholder_text: str = "Selecione uma pasta para visualizar suas imagens",
+        title: str,
+        browse_text: str,
+        browse_slot: Callable[[], None],
+        status_text: str,
+        object_name: str,
+        enable_selection: bool,
     ) -> QWidget:
         frame = QFrame()
-        frame.setObjectName("Viewer")
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-
-        caption = QLabel(title)
-        caption.setObjectName("ViewerTitle")
-        layout.addWidget(caption)
-
-        if browse_text and browse_slot:
-            browse_button = QPushButton(browse_text)
-            browse_button.clicked.connect(browse_slot)
-            layout.addWidget(browse_button)
-
-        path_label = QLabel("Nenhuma pasta selecionada.")
-        path_label.setObjectName("ViewerPath")
-        path_label.setWordWrap(True)
-        layout.addWidget(path_label)
-
-        placeholder = QLabel(placeholder_text)
-        placeholder.setWordWrap(True)
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setObjectName("ViewerPlaceholder")
-        layout.addWidget(placeholder, 1)
-
-        frame.captionLabel = caption  # type: ignore[attr-defined]
-        frame.placeholderLabel = placeholder  # type: ignore[attr-defined]
-        frame.pathLabel = path_label  # type: ignore[attr-defined]
-        return frame
-
-    def _create_source_panel(self) -> QWidget:
-        frame = QFrame()
-        frame.setObjectName("SourcePanel")
+        frame.setObjectName(object_name)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        title = QLabel("Arquivos da pasta selecionada")
-        title.setObjectName("SourceTitle")
-        layout.addWidget(title)
+        title_label = QLabel(title)
+        title_label.setObjectName(f"{object_name}Title")
+        layout.addWidget(title_label)
 
-        browse_button = QPushButton("Escolher pasta…")
-        browse_button.clicked.connect(self.browseFolderRequested.emit)
+        browse_button = QPushButton(browse_text)
+        browse_button.clicked.connect(browse_slot)
         layout.addWidget(browse_button)
 
         path_label = QLabel("Nenhuma pasta selecionada.")
         path_label.setWordWrap(True)
-        path_label.setObjectName("SourcePath")
+        path_label.setObjectName(f"{object_name}Path")
         layout.addWidget(path_label)
 
-        status = QLabel("Os arquivos compatíveis serão exibidos aqui.")
+        status = QLabel(status_text)
         status.setWordWrap(True)
-        status.setObjectName("SourceStatus")
+        status.setObjectName(f"{object_name}Status")
         layout.addWidget(status)
 
         slider_row = QHBoxLayout()
         slider_caption = QLabel("Tamanho das miniaturas")
         slider_row.addWidget(slider_caption)
         thumbnail_slider = QSlider(Qt.Orientation.Horizontal)
-        thumbnail_slider.setObjectName("SourceThumbnailSlider")
+        thumbnail_slider.setObjectName(f"{object_name}ThumbnailSlider")
         thumbnail_slider.setRange(80, 224)
         thumbnail_slider.setSingleStep(8)
         thumbnail_slider.setPageStep(16)
@@ -206,7 +188,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(slider_row)
 
         text_list = QListWidget()
-        text_list.setObjectName("SourceTextList")
+        text_list.setObjectName(f"{object_name}TextList")
         text_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         text_list.setViewMode(QListView.ViewMode.IconMode)
         text_list.setResizeMode(QListView.ResizeMode.Adjust)
@@ -218,7 +200,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(text_list)
 
         image_list = QListWidget()
-        image_list.setObjectName("SourceImageList")
+        image_list.setObjectName(f"{object_name}ImageList")
         image_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         image_list.setViewMode(QListView.ViewMode.IconMode)
         image_list.setResizeMode(QListView.ResizeMode.Adjust)
@@ -232,12 +214,12 @@ class MainWindow(QMainWindow):
         frame.thumbnailSlider = thumbnail_slider  # type: ignore[attr-defined]
         frame.textList = text_list  # type: ignore[attr-defined]
         frame.imageList = image_list  # type: ignore[attr-defined]
-
-        text_list.itemDoubleClicked.connect(self._handle_source_double_click)
-        image_list.itemDoubleClicked.connect(self._handle_source_double_click)
-
         frame.pathLabel = path_label  # type: ignore[attr-defined]
         frame.statusLabel = status  # type: ignore[attr-defined]
+
+        if enable_selection:
+            text_list.itemDoubleClicked.connect(self._handle_source_double_click)
+            image_list.itemDoubleClicked.connect(self._handle_source_double_click)
 
         return frame
 
@@ -312,49 +294,11 @@ class MainWindow(QMainWindow):
             path_label.setText(str(folder))
 
     def set_source_files(self, files: Iterable[Path]) -> None:
-        image_list: QListWidget | None = getattr(self.sourcePanel, "imageList", None)
-        text_list: QListWidget | None = getattr(self.sourcePanel, "textList", None)
         status_label: QLabel | None = getattr(self.sourcePanel, "statusLabel", None)
-        if image_list is None or text_list is None:
-            return
+        image_count, text_count = self._populate_panel_files(self.sourcePanel, files)
 
-        image_list.clear()
-        text_list.clear()
-
-        image_extensions = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-        text_extensions = {".txt"}
-        image_count = 0
-        text_count = 0
-
-        thumbnail_size = image_list.iconSize()
-        for file in files:
-            suffix = file.suffix.lower()
-            full_path = str(file)
-            item = QListWidgetItem(file.name)
-            item.setToolTip(full_path)
-            item.setData(Qt.ItemDataRole.UserRole, file.name)
-            item.setData(Qt.ItemDataRole.UserRole + 1, full_path)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
-            if suffix in image_extensions:
-                pixmap = QPixmap(str(file))
-                if not pixmap.isNull():
-                    thumbnail = pixmap.scaled(
-                        thumbnail_size,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                    item.setIcon(QIcon(thumbnail))
-                image_list.addItem(item)
-                image_count += 1
-            elif suffix in text_extensions:
-                text_list.addItem(item)
-                text_count += 1
-
-        image_list.setEnabled(image_count > 0)
-        text_list.setEnabled(text_count > 0)
-
-        self._refresh_image_captions()
-        self._refresh_text_captions()
+        self._refresh_image_captions(self.sourcePanel)
+        self._refresh_text_captions(self.sourcePanel)
         self._refresh_selected_captions()
 
         if status_label is not None:
@@ -372,48 +316,129 @@ class MainWindow(QMainWindow):
                     )
                 status_label.setText(" • ".join(parts))
 
+    def set_output_files(self, files: Iterable[Path]) -> None:
+        status_label: QLabel | None = getattr(self.outputPanel, "statusLabel", None)
+        image_count, text_count = self._populate_panel_files(self.outputPanel, files)
+
+        self._refresh_image_captions(self.outputPanel)
+        self._refresh_text_captions(self.outputPanel)
+
+        if status_label is not None:
+            if image_count == 0 and text_count == 0:
+                status_label.setText("Nenhum arquivo encontrado na pasta de destino.")
+            else:
+                parts: list[str] = []
+                if image_count:
+                    parts.append(
+                        f"{image_count} imagem{'s' if image_count != 1 else ''} disponível"
+                    )
+                if text_count:
+                    parts.append(
+                        f"{text_count} arquivo{'s' if text_count != 1 else ''} de texto"
+                    )
+                status_label.setText(" • ".join(parts))
+
+    def _populate_panel_files(
+        self, panel: QWidget | None, files: Iterable[Path]
+    ) -> tuple[int, int]:
+        image_list: QListWidget | None = getattr(panel, "imageList", None) if panel else None
+        text_list: QListWidget | None = getattr(panel, "textList", None) if panel else None
+        if image_list is None or text_list is None:
+            return (0, 0)
+
+        image_list.clear()
+        text_list.clear()
+
+        thumbnail_size = image_list.iconSize()
+        image_count = 0
+        text_count = 0
+
+        for file in files:
+            suffix = file.suffix.lower()
+            full_path = str(file)
+            item = QListWidgetItem(file.name)
+            item.setToolTip(full_path)
+            item.setData(Qt.ItemDataRole.UserRole, file.name)
+            item.setData(Qt.ItemDataRole.UserRole + 1, full_path)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
+            if suffix in self.IMAGE_EXTENSIONS:
+                pixmap = QPixmap(full_path)
+                if not pixmap.isNull():
+                    thumbnail = pixmap.scaled(
+                        thumbnail_size,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    item.setIcon(QIcon(thumbnail))
+                image_list.addItem(item)
+                image_count += 1
+            elif suffix in self.TEXT_EXTENSIONS:
+                text_list.addItem(item)
+                text_count += 1
+
+        image_list.setEnabled(image_count > 0)
+        text_list.setEnabled(text_count > 0)
+        return image_count, text_count
+
     def _update_thumbnail_size(self, value: int) -> None:
         self._apply_thumbnail_size(value)
-        self._refresh_image_captions()
+        self._refresh_image_captions(self.sourcePanel)
+        self._refresh_image_captions(self.outputPanel)
         self._refresh_selected_captions()
 
     def _apply_thumbnail_size(self, size: int) -> None:
         self._image_icon_size = size
         icon_extent = QSize(size, size)
-        image_list: QListWidget | None = getattr(self.sourcePanel, "imageList", None)
-        slider: QSlider | None = getattr(self.sourcePanel, "thumbnailSlider", None)
-        selected_tab = getattr(self, "selectedTab", None)
-        selected_list: QListWidget | None = (
-            getattr(selected_tab, "listWidget", None) if selected_tab is not None else None
-        )
-        if image_list is None:
+        grid_width = size + 40
+        grid_height = size + 56
+
+        panels = [getattr(self, "sourcePanel", None), getattr(self, "outputPanel", None)]
+        for panel in panels:
+            if panel is None:
+                continue
+            image_list: QListWidget | None = getattr(panel, "imageList", None)
+            slider: QSlider | None = getattr(panel, "thumbnailSlider", None)
+            if image_list is not None:
+                image_list.setIconSize(icon_extent)
+                image_list.setGridSize(QSize(grid_width, grid_height))
             if slider is not None and slider.value() != size:
                 slider.blockSignals(True)
                 slider.setValue(size)
                 slider.blockSignals(False)
-            return
-        image_list.setIconSize(icon_extent)
-        grid_width = size + 40
-        grid_height = size + 56
-        image_list.setGridSize(QSize(grid_width, grid_height))
+
+        selected_tab = getattr(self, "selectedTab", None)
+        selected_list: QListWidget | None = (
+            getattr(selected_tab, "listWidget", None) if selected_tab is not None else None
+        )
         if selected_list is not None:
             selected_list.setIconSize(icon_extent)
             selected_list.setGridSize(QSize(grid_width, grid_height))
-            selected_list.setSpacing(image_list.spacing())
-        if slider is not None and slider.value() != size:
-            slider.blockSignals(True)
-            slider.setValue(size)
-            slider.blockSignals(False)
+            source_panel = getattr(self, "sourcePanel", None)
+            spacing_reference = None
+            if source_panel is not None:
+                source_images: QListWidget | None = getattr(source_panel, "imageList", None)
+                if source_images is not None:
+                    spacing_reference = source_images.spacing()
+            if spacing_reference is not None:
+                selected_list.setSpacing(spacing_reference)
 
-    def _refresh_image_captions(self) -> None:
-        image_list: QListWidget | None = getattr(self.sourcePanel, "imageList", None)
+    def _refresh_image_captions(self, panel: QWidget | None = None) -> None:
+        image_list: QListWidget | None = None
+        if panel is not None:
+            image_list = getattr(panel, "imageList", None)
+        elif hasattr(self, "sourcePanel"):
+            image_list = getattr(self.sourcePanel, "imageList", None)
         if image_list is None:
             return
         available_width = image_list.gridSize().width() - 24
         self._refresh_list_labels(image_list, available_width)
 
-    def _refresh_text_captions(self) -> None:
-        text_list: QListWidget | None = getattr(self.sourcePanel, "textList", None)
+    def _refresh_text_captions(self, panel: QWidget | None = None) -> None:
+        text_list: QListWidget | None = None
+        if panel is not None:
+            text_list = getattr(panel, "textList", None)
+        elif hasattr(self, "sourcePanel"):
+            text_list = getattr(self.sourcePanel, "textList", None)
         if text_list is None:
             return
         available_width = text_list.gridSize().width() - 12
@@ -516,28 +541,22 @@ class MainWindow(QMainWindow):
 
     def apply_config(self, namespace: str, data: dict[str, object]) -> None:
         if namespace == "image":
-            self.configPanel.apply_config(data)
             self.settingsTab.apply_config(namespace, data)
 
-    def update_viewer(self, viewer: QWidget, *, title: str | None = None, message: str | None = None) -> None:
-        caption = getattr(viewer, "captionLabel", None)
-        placeholder = getattr(viewer, "placeholderLabel", None)
-        if title and caption is not None:
-            caption.setText(title)
-        if message and placeholder is not None:
-            placeholder.setText(message)
-    def update_right_viewer(self, title: str, message: str) -> None:
-        self.update_viewer(self.rightViewer, title=title, message=message)
-
     def set_output_folder(self, folder: Path) -> None:
-        path_label = getattr(self.rightViewer, "pathLabel", None)
+        path_label = getattr(self.outputPanel, "pathLabel", None)
         if path_label is not None:
             path_label.setText(str(folder))
 
     def clear_output_folder(self) -> None:
-        path_label = getattr(self.rightViewer, "pathLabel", None)
+        path_label = getattr(self.outputPanel, "pathLabel", None)
         if path_label is not None:
             path_label.setText("Nenhuma pasta selecionada.")
+
+    def update_output_status(self, message: str) -> None:
+        status_label = getattr(self.outputPanel, "statusLabel", None)
+        if status_label is not None:
+            status_label.setText(message)
 
     def prompt_text(self) -> str:
         return self.promptEdit.toPlainText()

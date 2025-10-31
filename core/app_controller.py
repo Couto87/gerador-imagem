@@ -6,7 +6,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QMessageBox
 
 from .config_manager import ConfigManager
-from .image_manager import ImageManager
+from .image_manager import ImageManager, MEDIA_EXTENSIONS
 from ui.main_window import MainWindow
 
 
@@ -18,7 +18,7 @@ class AppController:
 
         self.output_directory: Path | None = None
 
-        self.window.configPanel.optionChanged.connect(self._on_option_changed)
+        self.window.settingsTab.optionChanged.connect(self._on_option_changed)
         self.window.promptSubmitted.connect(self._on_prompt_submitted)
         self.window.browseFolderRequested.connect(self._on_browse_folder)
         self.window.outputBrowseRequested.connect(self._on_browse_output)
@@ -39,10 +39,19 @@ class AppController:
             if output_path.exists():
                 self.output_directory = output_path
                 self.window.set_output_folder(output_path)
+                self._refresh_output_files()
             else:
+                self.output_directory = None
                 self.window.clear_output_folder()
+                self.window.set_output_files([])
+                self.window.update_output_status(
+                    "A pasta de destino configurada não existe mais. Selecione outra pasta."
+                )
         else:
+            self.output_directory = None
             self.window.clear_output_folder()
+            self.window.set_output_files([])
+            self.window.update_output_status("Nenhuma pasta de destino selecionada.")
 
         recent = self.config_manager.recent_folders()
         if recent:
@@ -62,7 +71,7 @@ class AppController:
             "Prompt recebido! Configure suas opções e utilize as integrações de IA "
             "para gerar o conteúdo desejado."
         )
-        self.window.update_right_viewer("Pronto para gerar", message)
+        self.window.update_output_status(message)
         self.window.clear_prompt()
 
     def _on_browse_folder(self) -> None:
@@ -80,6 +89,7 @@ class AppController:
         self.output_directory = folder
         self.window.set_output_folder(folder)
         self.config_manager.update("paths", "output_folder", str(folder))
+        self._refresh_output_files()
 
     def _open_settings_tab(self) -> None:
         index = self.window.tabs.indexOf(self.window.settingsTab)
@@ -111,3 +121,20 @@ class AppController:
             )
         self.window.update_source_status(message)
         self.window.set_path_label(folder)
+
+    def _refresh_output_files(self) -> None:
+        if self.output_directory is None or not self.output_directory.exists():
+            self.window.set_output_files([])
+            self.window.update_output_status("Nenhuma pasta de destino selecionada.")
+            return
+
+        files = [
+            path
+            for path in sorted(self.output_directory.iterdir())
+            if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS
+        ]
+        self.window.set_output_files(files)
+        if not files:
+            self.window.update_output_status(
+                "Nenhum arquivo encontrado na pasta de destino selecionada."
+            )
