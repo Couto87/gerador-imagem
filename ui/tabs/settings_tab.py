@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from typing import Dict
 
+from pathlib import Path
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
-    QTableWidget,
-    QTableWidgetItem,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -19,6 +21,7 @@ class SettingsTab(QWidget):
     """Aggregate generation options and the currently saved configuration."""
 
     optionChanged = pyqtSignal(str, str, object)
+    outputFolderBrowseRequested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -30,17 +33,24 @@ class SettingsTab(QWidget):
         self.configPanel.optionChanged.connect(self.optionChanged)
         layout.addWidget(self.configPanel)
 
-        title = QLabel("Configuração atual")
-        title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        title.setObjectName("TabTitle")
-        layout.addWidget(title)
+        destination_title = QLabel("Destino das exportações")
+        destination_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        destination_title.setObjectName("TabTitle")
+        layout.addWidget(destination_title)
 
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["Chave", "Valor"])
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        layout.addWidget(self.table, 1)
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(8)
+
+        self.outputFolderLabel = QLabel("Nenhuma pasta selecionada.")
+        self.outputFolderLabel.setWordWrap(True)
+        folder_row.addWidget(self.outputFolderLabel, 1)
+
+        browse_button = QPushButton("Selecionar pasta…")
+        browse_button.clicked.connect(self.outputFolderBrowseRequested.emit)
+        folder_row.addWidget(browse_button)
+
+        layout.addLayout(folder_row)
+        layout.addStretch(1)
 
     def apply_config(self, namespace: str, data: Dict[str, object]) -> None:
         if namespace != "image":
@@ -48,9 +58,8 @@ class SettingsTab(QWidget):
 
         self.configPanel.apply_config(data)
 
-        self.table.setRowCount(0)
-        for key, value in data.items():
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(str(key)))
-            self.table.setItem(row, 1, QTableWidgetItem(str(value)))
+    def set_output_folder(self, folder: Path | str | None) -> None:
+        if folder is None:
+            self.outputFolderLabel.setText("Nenhuma pasta selecionada.")
+        else:
+            self.outputFolderLabel.setText(str(folder))
