@@ -19,14 +19,12 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSlider,
     QSplitter,
-    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from .tabs.home_tab import HomeTab
-from .tabs.settings_tab import SettingsTab
+from .config_panel import ConfigPanel
 
 
 class MainWindow(QMainWindow):
@@ -80,20 +78,19 @@ class MainWindow(QMainWindow):
         center_layout.setContentsMargins(12, 16, 12, 16)
         center_layout.setSpacing(12)
 
-        self.tabs = QTabWidget()
-        self.homeTab = HomeTab()
-        self.settingsTab = SettingsTab()
-        self.tabs.addTab(self.homeTab, "Início")
-        self.selectedTab = self._create_selected_tab()
-        self.tabs.addTab(self.selectedTab, "Selecionados")
-        self.tabs.addTab(self.settingsTab, "Configurações")
-        center_layout.addWidget(self.tabs, 1)
+        self.configPanel = ConfigPanel()
+        center_layout.addWidget(self.configPanel)
+
+        self.selectedPanel = self._create_selected_panel()
+        self.selectedPanel.setVisible(False)
+        center_layout.addWidget(self.selectedPanel)
 
         composer = self._create_composer()
         center_layout.addWidget(composer)
 
-        center_layout.setStretch(0, 3)
-        center_layout.setStretch(1, 2)
+        center_layout.setStretch(0, 0)
+        center_layout.setStretch(1, 1)
+        center_layout.setStretch(2, 1)
 
         splitter.addWidget(center)
 
@@ -191,7 +188,7 @@ class MainWindow(QMainWindow):
 
         return frame
 
-    def _create_selected_tab(self) -> QWidget:
+    def _create_selected_panel(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -237,6 +234,7 @@ class MainWindow(QMainWindow):
 
         remove_button = QPushButton("Remover selecionados")
         remove_button.clicked.connect(self._remove_selected_items)
+        remove_button.setEnabled(False)
         layout.addWidget(remove_button)
 
         text_list.itemDoubleClicked.connect(
@@ -376,9 +374,9 @@ class MainWindow(QMainWindow):
                 slider.setValue(size)
                 slider.blockSignals(False)
 
-        selected_tab = getattr(self, "selectedTab", None)
-        if selected_tab is not None:
-            image_list: QListWidget | None = getattr(selected_tab, "imageList", None)
+        selected_panel = getattr(self, "selectedPanel", None)
+        if selected_panel is not None:
+            image_list: QListWidget | None = getattr(selected_panel, "imageList", None)
             if image_list is not None:
                 image_list.setIconSize(icon_extent)
                 image_list.setGridSize(QSize(grid_width, grid_height))
@@ -411,17 +409,33 @@ class MainWindow(QMainWindow):
         self._refresh_list_labels(text_list, available_width)
 
     def _refresh_selected_captions(self) -> None:
-        selected_tab = getattr(self, "selectedTab", None)
-        if selected_tab is None:
+        selected_panel = getattr(self, "selectedPanel", None)
+        if selected_panel is None:
             return
-        text_list: QListWidget | None = getattr(selected_tab, "textList", None)
-        image_list: QListWidget | None = getattr(selected_tab, "imageList", None)
+        text_list: QListWidget | None = getattr(selected_panel, "textList", None)
+        image_list: QListWidget | None = getattr(selected_panel, "imageList", None)
         if text_list is not None:
             available_text_width = text_list.gridSize().width() - 12
             self._refresh_list_labels(text_list, available_text_width)
         if image_list is not None:
             available_image_width = image_list.gridSize().width() - 24
             self._refresh_list_labels(image_list, available_image_width)
+
+    def _update_selected_visibility(self) -> None:
+        selected_panel = getattr(self, "selectedPanel", None)
+        if selected_panel is None:
+            return
+        text_list: QListWidget | None = getattr(selected_panel, "textList", None)
+        image_list: QListWidget | None = getattr(selected_panel, "imageList", None)
+        has_items = False
+        for lst in (text_list, image_list):
+            if lst is not None and lst.count() > 0:
+                has_items = True
+                break
+        selected_panel.setVisible(has_items)
+        remove_button: QPushButton | None = getattr(selected_panel, "removeButton", None)
+        if remove_button is not None:
+            remove_button.setEnabled(has_items)
 
     def _refresh_list_labels(self, list_widget: QListWidget, width: int) -> None:
         if width <= 0:
@@ -442,14 +456,13 @@ class MainWindow(QMainWindow):
         self._add_selected_file(Path(str(path_data)))
 
     def _add_selected_file(self, path: Path) -> None:
-        selected_tab = getattr(self, "selectedTab", None)
-        if selected_tab is None:
+        selected_panel = getattr(self, "selectedPanel", None)
+        if selected_panel is None:
             return
-        text_list: QListWidget | None = getattr(selected_tab, "textList", None)
-        image_list: QListWidget | None = getattr(selected_tab, "imageList", None)
+        text_list: QListWidget | None = getattr(selected_panel, "textList", None)
+        image_list: QListWidget | None = getattr(selected_panel, "imageList", None)
         path_str = str(path)
         if path_str in self._selected_paths:
-            self.tabs.setCurrentWidget(self.selectedTab)
             return
 
         item = QListWidgetItem(path.name)
@@ -476,18 +489,19 @@ class MainWindow(QMainWindow):
                 self._adjust_text_list_height(text_list)
         self._selected_paths.add(path_str)
         self._refresh_selected_captions()
-        self.tabs.setCurrentWidget(self.selectedTab)
+        self._update_selected_visibility()
 
     def _remove_selected_items(self) -> None:
-        selected_tab = getattr(self, "selectedTab", None)
-        if selected_tab is None:
+        selected_panel = getattr(self, "selectedPanel", None)
+        if selected_panel is None:
             return
-        text_list: QListWidget | None = getattr(selected_tab, "textList", None)
-        image_list: QListWidget | None = getattr(selected_tab, "imageList", None)
+        text_list: QListWidget | None = getattr(selected_panel, "textList", None)
+        image_list: QListWidget | None = getattr(selected_panel, "imageList", None)
         lists = [lst for lst in (text_list, image_list) if lst is not None]
         for lst in lists:
             for item in lst.selectedItems():
                 self._remove_selected_item(item, lst)
+        self._update_selected_visibility()
 
     def _remove_selected_item(self, item: QListWidgetItem, list_widget: QListWidget) -> None:
         path_data = item.data(Qt.ItemDataRole.UserRole + 1)
@@ -499,6 +513,7 @@ class MainWindow(QMainWindow):
         if list_widget in self._text_lists:
             self._adjust_text_list_height(list_widget)
         self._refresh_selected_captions()
+        self._update_selected_visibility()
 
     def update_source_status(self, message: str) -> None:
         status_label = getattr(self.sourcePanel, "statusLabel", None)
@@ -507,7 +522,10 @@ class MainWindow(QMainWindow):
 
     def apply_config(self, namespace: str, data: dict[str, object]) -> None:
         if namespace == "image":
-            self.settingsTab.apply_config(namespace, data)
+            self.configPanel.apply_config(data)
+
+    def set_output_folder(self, folder: Path | str | None) -> None:
+        self.configPanel.set_output_folder(folder)
 
     def prompt_text(self) -> str:
         return self.promptEdit.toPlainText()

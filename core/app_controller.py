@@ -18,10 +18,10 @@ class AppController:
 
         self.output_directory: Path | None = None
 
-        self.window.settingsTab.optionChanged.connect(self._on_option_changed)
+        self.window.configPanel.optionChanged.connect(self._on_option_changed)
         self.window.promptSubmitted.connect(self._on_prompt_submitted)
         self.window.browseFolderRequested.connect(self._on_browse_folder)
-        self.window.settingsTab.outputFolderBrowseRequested.connect(
+        self.window.configPanel.outputFolderBrowseRequested.connect(
             self._on_browse_output
         )
 
@@ -39,13 +39,13 @@ class AppController:
             output_path = Path(output_folder)
             if output_path.exists():
                 self.output_directory = output_path
-                self.window.settingsTab.set_output_folder(output_path)
+                self.window.set_output_folder(output_path)
             else:
                 self.output_directory = None
-                self.window.settingsTab.set_output_folder(None)
+                self.window.set_output_folder(None)
         else:
             self.output_directory = None
-            self.window.settingsTab.set_output_folder(None)
+            self.window.set_output_folder(None)
 
         recent = self.config_manager.recent_folders()
         if recent:
@@ -82,7 +82,7 @@ class AppController:
         if folder is None:
             return
         self.output_directory = folder
-        self.window.settingsTab.set_output_folder(folder)
+        self.window.set_output_folder(folder)
         self.config_manager.update("paths", "output_folder", str(folder))
 
     def _select_directory(self, folder: Path) -> None:
