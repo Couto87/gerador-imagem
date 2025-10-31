@@ -1,0 +1,153 @@
+/* Tema escuro moderno para o Image Studio IA */
+QWidget {
+    background-color: #121417;
+    color: #e8edf5;
+    font-family: "Inter", "Segoe UI", sans-serif;
+    font-size: 14px;
+}
+
+#TopBar {
+    background-color: rgba(0, 0, 0, 0.35);
+    border-bottom: 1px solid #243041;
+}
+
+#BrandLabel {
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+#PathLabel {
+    color: #8691a3;
+}
+
+QPushButton {
+    background-color: #243041;
+    border: 1px solid #2c3a4f;
+    border-radius: 8px;
+    padding: 8px 14px;
+    color: #cfe0ff;
+}
+
+QPushButton:hover {
+    background-color: #2b3a52;
+}
+
+QPushButton:pressed {
+    background-color: #1c2838;
+}
+
+#Viewer, #Composer {
+    background-color: #1b2129;
+    border: 2px solid #243041;
+    border-radius: 12px;
+}
+
+#ViewerTitle {
+    font-weight: 700;
+    color: #cfe0ff;
+}
+
+#ViewerPlaceholder {
+    color: #8691a3;
+    border: 1px dashed #243041;
+    border-radius: 10px;
+    padding: 24px;
+}
+
+#SidebarTitle {
+    font-weight: 600;
+    font-size: 13px;
+    color: #9cb9ff;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+#SidebarList {
+    border: 1px solid #243041;
+    border-radius: 8px;
+    background-color: #141b22;
+}
+
+#SidebarList::item {
+    padding: 8px 12px;
+}
+
+#SidebarList::item:selected {
+    background-color: #243957;
+    color: #ffffff;
+}
+
+QTabWidget::pane {
+    border: 1px solid #243041;
+    border-radius: 10px;
+    background: #1b2129;
+    margin-top: 6px;
+}
+
+QTabBar::tab {
+    background: #161d26;
+    border: 1px solid #243041;
+    border-bottom: none;
+    padding: 8px 14px;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    color: #cfe0ff;
+}
+
+QTabBar::tab:selected {
+    background: #243957;
+}
+
+QGroupBox {
+    border: 1px solid #243041;
+    border-radius: 10px;
+    margin-top: 12px;
+    background-color: #141b22;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 3px 0 3px;
+}
+
+QComboBox, QSpinBox {
+    border: 1px solid #2b394e;
+    border-radius: 8px;
+    padding: 6px 10px;
+    background-color: #0f151d;
+    color: #e8edf5;
+}
+
+QListWidget {
+    background-color: #0f1218;
+    border: 1px solid #2b394e;
+    border-radius: 8px;
+}
+
+QTextEdit {
+    border: 1px solid #2b394e;
+    border-radius: 8px;
+    background-color: #0f1218;
+}
+
+QScrollBar:vertical {
+    background: #141b22;
+    width: 10px;
+    margin: 4px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical {
+    background: #243957;
+    border-radius: 5px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    background: none;
+}
+
+QTableWidget {
+    gridline-color: #243041;
+    selection-background-color: #243957;
+}
