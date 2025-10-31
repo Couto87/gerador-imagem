@@ -1,10 +1,12 @@
 """Panel with generation options."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, Iterable
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QHBoxLayout,
     QComboBox,
     QFormLayout,
     QGroupBox,
@@ -12,6 +14,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QVBoxLayout,
     QWidget,
+    QPushButton,
 )
 
 
@@ -19,17 +22,17 @@ class ConfigPanel(QWidget):
     """Expose controls for generation parameters."""
 
     optionChanged = pyqtSignal(str, str, object)
+    outputFolderBrowseRequested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._destination_path: str | None = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
-
-        layout.addWidget(QLabel("Configurações de geração"))
 
         self.sizeCombo = self._create_combo(
             [
@@ -55,6 +58,25 @@ class ConfigPanel(QWidget):
         form.addRow("Resolução", self.resolutionCombo)
         form.addRow("Quantidade", quantityBox)
         form.addRow("Tipo", self.typeCombo)
+
+        destination_container = QWidget()
+        destination_layout = QHBoxLayout(destination_container)
+        destination_layout.setContentsMargins(0, 0, 0, 0)
+        destination_layout.setSpacing(8)
+
+        destination_label = QLabel("Nenhuma pasta selecionada.")
+        destination_label.setWordWrap(True)
+        destination_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        destination_layout.addWidget(destination_label, 1)
+
+        browse_button = QPushButton("Selecionar…")
+        browse_button.clicked.connect(self.outputFolderBrowseRequested.emit)
+        destination_layout.addWidget(browse_button)
+
+        self.destinationLabel = destination_label
+        self.destinationButton = browse_button
+
+        form.addRow("Destino", destination_container)
 
         group = QGroupBox()
         group.setLayout(form)
@@ -100,3 +122,26 @@ class ConfigPanel(QWidget):
             index = self.typeCombo.findText(item_type)
             if index >= 0:
                 self.typeCombo.setCurrentIndex(index)
+
+    def set_output_folder(self, folder: Path | str | None) -> None:
+        if folder is None:
+            self._destination_path = None
+            self.destinationLabel.setText("Nenhuma pasta selecionada.")
+            return
+
+        text = str(folder)
+        self._destination_path = text
+        metrics = self.destinationLabel.fontMetrics()
+        available_width = max(0, self.destinationLabel.width())
+        if available_width:
+            elided = metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, available_width)
+            self.destinationLabel.setText(elided)
+        else:
+            self.destinationLabel.setText(text)
+
+    def resizeEvent(self, event):  # type: ignore[override]
+        super().resizeEvent(event)
+        if self._destination_path is None:
+            self.destinationLabel.setText("Nenhuma pasta selecionada.")
+        else:
+            self.set_output_folder(self._destination_path)

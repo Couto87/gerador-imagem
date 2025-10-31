@@ -2,16 +2,22 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
+from math import ceil
+from typing import Callable, Iterable
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListView,
     QMainWindow,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
+    QSlider,
     QSplitter,
     QTabWidget,
     QTextEdit,
@@ -19,9 +25,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .config_panel import ConfigPanel
-from .sidebar import Sidebar
-from .tabs.gallery_tab import GalleryTab
 from .tabs.home_tab import HomeTab
 from .tabs.settings_tab import SettingsTab
 
@@ -31,12 +34,18 @@ class MainWindow(QMainWindow):
 
     promptSubmitted = pyqtSignal(str)
     browseFolderRequested = pyqtSignal()
-    configRequested = pyqtSignal()
+
+    IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    TEXT_EXTENSIONS = {".txt"}
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Image Studio IA")
         self.resize(1280, 768)
+        self._image_icon_size = 128
+        self._text_tile_width = 220
+        self._selected_paths: set[str] = set()
+        self._text_lists: list[QListWidget] = []
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -46,9 +55,6 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self.topbar = self._create_topbar()
-        root.addWidget(self.topbar)
-
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         root.addWidget(splitter, 1)
@@ -57,84 +63,192 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(16, 16, 12, 16)
         left_layout.setSpacing(12)
-
-        self.leftViewer = self._create_viewer("Pasta selecionada")
-        left_layout.addWidget(self.leftViewer)
-
-        self.sidebar = Sidebar()
-        self.sidebar.folderSelected.connect(self._on_folder_selected)
-        self.sidebar.browseRequested.connect(self.browseFolderRequested.emit)
-        left_layout.addWidget(self.sidebar, 1)
-
+        self.sourcePanel = self._create_file_panel(
+            title="Arquivos da pasta selecionada",
+            browse_text="Escolher pasta…",
+            browse_slot=self.browseFolderRequested.emit,
+            status_text="Os arquivos compatíveis serão exibidos aqui.",
+            object_name="SourcePanel",
+            enable_selection=True,
+        )
+        left_layout.addWidget(self.sourcePanel, 1)
         splitter.addWidget(left)
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(12, 16, 16, 16)
-        right_layout.setSpacing(12)
-
-        self.rightViewer = self._create_viewer("Saída das imagens geradas")
-        right_layout.addWidget(self.rightViewer)
-
-        self.configPanel = ConfigPanel()
-        right_layout.addWidget(self.configPanel)
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(12, 16, 12, 16)
+        center_layout.setSpacing(12)
 
         self.tabs = QTabWidget()
         self.homeTab = HomeTab()
-        self.galleryTab = GalleryTab()
         self.settingsTab = SettingsTab()
         self.tabs.addTab(self.homeTab, "Início")
-        self.tabs.addTab(self.galleryTab, "Galeria")
+        self.selectedTab = self._create_selected_tab()
+        self.tabs.addTab(self.selectedTab, "Selecionados")
         self.tabs.addTab(self.settingsTab, "Configurações")
-        right_layout.addWidget(self.tabs, 1)
+        center_layout.addWidget(self.tabs, 1)
 
         composer = self._create_composer()
-        right_layout.addWidget(composer)
+        center_layout.addWidget(composer)
 
-        splitter.addWidget(right)
+        center_layout.setStretch(0, 3)
+        center_layout.setStretch(1, 2)
+
+        splitter.addWidget(center)
+
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 3)
 
-    def _create_topbar(self) -> QWidget:
+        self._apply_thumbnail_size(self._image_icon_size)
+
+    def _create_file_panel(
+        self,
+        *,
+        title: str,
+        browse_text: str,
+        browse_slot: Callable[[], None],
+        status_text: str,
+        object_name: str,
+        enable_selection: bool,
+    ) -> QWidget:
         frame = QFrame()
-        frame.setObjectName("TopBar")
-        layout = QHBoxLayout(frame)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(12)
-
-        self.brandLabel = QLabel("Image Studio IA")
-        self.brandLabel.setObjectName("BrandLabel")
-        layout.addWidget(self.brandLabel)
-
-        self.pathLabel = QLabel("Pasta: —")
-        self.pathLabel.setObjectName("PathLabel")
-        layout.addWidget(self.pathLabel, 1)
-
-        self.configButton = QPushButton("Configurações")
-        self.configButton.clicked.connect(self.configRequested.emit)
-        layout.addWidget(self.configButton)
-        return frame
-
-    def _create_viewer(self, title: str) -> QWidget:
-        frame = QFrame()
-        frame.setObjectName("Viewer")
+        frame.setObjectName(object_name)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        caption = QLabel(title)
-        caption.setObjectName("ViewerTitle")
-        layout.addWidget(caption)
+        title_label = QLabel(title)
+        title_label.setObjectName(f"{object_name}Title")
+        layout.addWidget(title_label)
 
-        placeholder = QLabel("Selecione uma pasta para visualizar suas imagens")
-        placeholder.setWordWrap(True)
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setObjectName("ViewerPlaceholder")
-        layout.addWidget(placeholder, 1)
+        browse_button = QPushButton(browse_text)
+        browse_button.clicked.connect(browse_slot)
+        layout.addWidget(browse_button)
 
-        frame.captionLabel = caption  # type: ignore[attr-defined]
-        frame.placeholderLabel = placeholder  # type: ignore[attr-defined]
+        path_label = QLabel("Nenhuma pasta selecionada.")
+        path_label.setWordWrap(True)
+        path_label.setObjectName(f"{object_name}Path")
+        layout.addWidget(path_label)
+
+        status = QLabel(status_text)
+        status.setWordWrap(True)
+        status.setObjectName(f"{object_name}Status")
+        layout.addWidget(status)
+
+        slider_row = QHBoxLayout()
+        slider_caption = QLabel("Tamanho das miniaturas")
+        slider_row.addWidget(slider_caption)
+        thumbnail_slider = QSlider(Qt.Orientation.Horizontal)
+        thumbnail_slider.setObjectName(f"{object_name}ThumbnailSlider")
+        thumbnail_slider.setRange(80, 224)
+        thumbnail_slider.setSingleStep(8)
+        thumbnail_slider.setPageStep(16)
+        thumbnail_slider.setValue(self._image_icon_size)
+        thumbnail_slider.valueChanged.connect(self._update_thumbnail_size)
+        slider_row.addWidget(thumbnail_slider, 1)
+        layout.addLayout(slider_row)
+
+        text_list = QListWidget()
+        text_list.setObjectName(f"{object_name}TextList")
+        text_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        text_list.setViewMode(QListView.ViewMode.IconMode)
+        text_list.setResizeMode(QListView.ResizeMode.Adjust)
+        text_list.setMovement(QListView.Movement.Static)
+        text_list.setWrapping(True)
+        text_list.setSpacing(2)
+        text_list.setWordWrap(True)
+        text_list.setGridSize(QSize(self._text_tile_width, 38))
+        layout.addWidget(text_list)
+
+        image_list = QListWidget()
+        image_list.setObjectName(f"{object_name}ImageList")
+        image_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        image_list.setViewMode(QListView.ViewMode.IconMode)
+        image_list.setResizeMode(QListView.ResizeMode.Adjust)
+        image_list.setMovement(QListView.Movement.Static)
+        image_list.setWrapping(True)
+        image_list.setSpacing(3)
+        image_list.setWordWrap(True)
+        image_list.setUniformItemSizes(False)
+        layout.addWidget(image_list, 1)
+
+        frame.thumbnailSlider = thumbnail_slider  # type: ignore[attr-defined]
+        frame.textList = text_list  # type: ignore[attr-defined]
+        frame.imageList = image_list  # type: ignore[attr-defined]
+        frame.pathLabel = path_label  # type: ignore[attr-defined]
+        frame.statusLabel = status  # type: ignore[attr-defined]
+
+        text_list.setVisible(False)
+        text_list.setSizeAdjustPolicy(QListView.SizeAdjustPolicy.AdjustToContents)
+        self._register_text_list(text_list)
+
+        if enable_selection:
+            text_list.itemDoubleClicked.connect(self._handle_source_double_click)
+            image_list.itemDoubleClicked.connect(self._handle_source_double_click)
+
         return frame
+
+    def _create_selected_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        description = QLabel(
+            "Arquivos selecionados a partir da pasta de origem. Dê um clique duplo para removê-los."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        text_list = QListWidget()
+        text_list.setObjectName("SelectedTextList")
+        text_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        text_list.setViewMode(QListView.ViewMode.IconMode)
+        text_list.setResizeMode(QListView.ResizeMode.Adjust)
+        text_list.setMovement(QListView.Movement.Static)
+        text_list.setWrapping(True)
+        text_list.setSpacing(2)
+        text_list.setWordWrap(True)
+        text_list.setGridSize(QSize(self._text_tile_width, 38))
+        layout.addWidget(text_list)
+
+        image_list = QListWidget()
+        image_list.setObjectName("SelectedImageList")
+        image_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        image_list.setViewMode(QListView.ViewMode.IconMode)
+        image_list.setResizeMode(QListView.ResizeMode.Adjust)
+        image_list.setMovement(QListView.Movement.Static)
+        image_list.setWrapping(True)
+        image_list.setSpacing(3)
+        image_list.setWordWrap(True)
+        image_list.setIconSize(QSize(self._image_icon_size, self._image_icon_size))
+        image_list.setGridSize(
+            QSize(
+                max(self._image_icon_size + 8, int(self._image_icon_size * 1.05)),
+                self._image_icon_size + 28,
+            )
+        )
+        layout.addWidget(image_list, 1)
+
+        remove_button = QPushButton("Remover selecionados")
+        remove_button.clicked.connect(self._remove_selected_items)
+        layout.addWidget(remove_button)
+
+        text_list.itemDoubleClicked.connect(
+            lambda item, list_widget=text_list: self._remove_selected_item(item, list_widget)
+        )
+        image_list.itemDoubleClicked.connect(
+            lambda item, list_widget=image_list: self._remove_selected_item(item, list_widget)
+        )
+
+        widget.textList = text_list  # type: ignore[attr-defined]
+        widget.imageList = image_list  # type: ignore[attr-defined]
+        widget.removeButton = remove_button  # type: ignore[attr-defined]
+
+        text_list.setVisible(False)
+        text_list.setSizeAdjustPolicy(QListView.SizeAdjustPolicy.AdjustToContents)
+        self._register_text_list(text_list)
+        return widget
 
     def _create_composer(self) -> QWidget:
         frame = QFrame()
@@ -142,9 +256,6 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
-
-        label = QLabel("Prompt ou instruções")
-        layout.addWidget(label)
 
         self.promptEdit = QTextEdit()
         self.promptEdit.setPlaceholderText("Descreva aqui o que deseja gerar…")
@@ -163,41 +274,233 @@ class MainWindow(QMainWindow):
         if text:
             self.promptSubmitted.emit(text)
 
-    def _on_folder_selected(self, folder: Path) -> None:
-        self.set_path_label(folder)
-
     # Public helpers -----------------------------------------------------
-    def set_path_label(self, path: Path) -> None:
-        self.pathLabel.setText(f"Pasta: {path}")
+    def set_source_folder(self, folder: Path) -> None:
+        path_label = getattr(self.sourcePanel, "pathLabel", None)
+        if path_label is not None:
+            path_label.setText(str(folder))
 
-    def set_directories(self, directories: Iterable[Path]) -> None:
-        self.sidebar.set_directories(directories)
+    def set_source_files(self, files: Iterable[Path]) -> None:
+        status_label: QLabel | None = getattr(self.sourcePanel, "statusLabel", None)
+        image_count, text_count = self._populate_panel_files(self.sourcePanel, files)
 
-    def select_directory(self, directory: Path) -> None:
-        self.sidebar.select_folder(directory)
-        self.set_path_label(directory)
+        self._refresh_image_captions(self.sourcePanel)
+        self._refresh_text_captions(self.sourcePanel)
+        self._refresh_selected_captions()
 
-    def set_gallery_images(self, images: Iterable[Path]) -> None:
-        self.galleryTab.set_images(images)
+        if status_label is not None:
+            if image_count == 0 and text_count == 0:
+                status_label.setText("Nenhum arquivo compatível encontrado.")
+            else:
+                parts: list[str] = []
+                if image_count:
+                    parts.append(
+                        f"{image_count} imagem{'s' if image_count != 1 else ''} encontrada"
+                    )
+                if text_count:
+                    parts.append(
+                        f"{text_count} arquivo{'s' if text_count != 1 else ''} de texto"
+                    )
+                status_label.setText(" • ".join(parts))
+
+    def _populate_panel_files(
+        self, panel: QWidget | None, files: Iterable[Path]
+    ) -> tuple[int, int]:
+        image_list: QListWidget | None = getattr(panel, "imageList", None) if panel else None
+        text_list: QListWidget | None = getattr(panel, "textList", None) if panel else None
+        if image_list is None or text_list is None:
+            return (0, 0)
+
+        image_list.clear()
+        text_list.clear()
+
+        thumbnail_size = image_list.iconSize()
+        image_count = 0
+        text_count = 0
+
+        for file in files:
+            suffix = file.suffix.lower()
+            full_path = str(file)
+            item = QListWidgetItem(file.name)
+            item.setToolTip(full_path)
+            item.setData(Qt.ItemDataRole.UserRole, file.name)
+            item.setData(Qt.ItemDataRole.UserRole + 1, full_path)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
+            if suffix in self.IMAGE_EXTENSIONS:
+                pixmap = QPixmap(full_path)
+                if not pixmap.isNull():
+                    thumbnail = pixmap.scaled(
+                        thumbnail_size,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    item.setIcon(QIcon(thumbnail))
+                image_list.addItem(item)
+                image_count += 1
+            elif suffix in self.TEXT_EXTENSIONS:
+                text_list.addItem(item)
+                text_count += 1
+
+        image_list.setEnabled(image_count > 0)
+        text_list.setEnabled(text_count > 0)
+        self._adjust_text_list_height(text_list)
+        return image_count, text_count
+
+    def _update_thumbnail_size(self, value: int) -> None:
+        self._apply_thumbnail_size(value)
+        self._refresh_image_captions(self.sourcePanel)
+        self._refresh_selected_captions()
+
+    def _apply_thumbnail_size(self, size: int) -> None:
+        self._image_icon_size = size
+        icon_extent = QSize(size, size)
+        grid_width = max(size + 8, int(size * 1.05))
+        grid_height = size + 28
+
+        source_panel = getattr(self, "sourcePanel", None)
+        if source_panel is not None:
+            image_list: QListWidget | None = getattr(source_panel, "imageList", None)
+            slider: QSlider | None = getattr(source_panel, "thumbnailSlider", None)
+            if image_list is not None:
+                image_list.setIconSize(icon_extent)
+                image_list.setGridSize(QSize(grid_width, grid_height))
+            if slider is not None and slider.value() != size:
+                slider.blockSignals(True)
+                slider.setValue(size)
+                slider.blockSignals(False)
+
+        selected_tab = getattr(self, "selectedTab", None)
+        if selected_tab is not None:
+            image_list: QListWidget | None = getattr(selected_tab, "imageList", None)
+            if image_list is not None:
+                image_list.setIconSize(icon_extent)
+                image_list.setGridSize(QSize(grid_width, grid_height))
+                source_images: QListWidget | None = (
+                    getattr(source_panel, "imageList", None) if source_panel is not None else None
+                )
+                if source_images is not None:
+                    image_list.setSpacing(source_images.spacing())
+
+    def _refresh_image_captions(self, panel: QWidget | None = None) -> None:
+        image_list: QListWidget | None = None
+        if panel is not None:
+            image_list = getattr(panel, "imageList", None)
+        elif hasattr(self, "sourcePanel"):
+            image_list = getattr(self.sourcePanel, "imageList", None)
+        if image_list is None:
+            return
+        available_width = image_list.gridSize().width() - 24
+        self._refresh_list_labels(image_list, available_width)
+
+    def _refresh_text_captions(self, panel: QWidget | None = None) -> None:
+        text_list: QListWidget | None = None
+        if panel is not None:
+            text_list = getattr(panel, "textList", None)
+        elif hasattr(self, "sourcePanel"):
+            text_list = getattr(self.sourcePanel, "textList", None)
+        if text_list is None:
+            return
+        available_width = text_list.gridSize().width() - 12
+        self._refresh_list_labels(text_list, available_width)
+
+    def _refresh_selected_captions(self) -> None:
+        selected_tab = getattr(self, "selectedTab", None)
+        if selected_tab is None:
+            return
+        text_list: QListWidget | None = getattr(selected_tab, "textList", None)
+        image_list: QListWidget | None = getattr(selected_tab, "imageList", None)
+        if text_list is not None:
+            available_text_width = text_list.gridSize().width() - 12
+            self._refresh_list_labels(text_list, available_text_width)
+        if image_list is not None:
+            available_image_width = image_list.gridSize().width() - 24
+            self._refresh_list_labels(image_list, available_image_width)
+
+    def _refresh_list_labels(self, list_widget: QListWidget, width: int) -> None:
+        if width <= 0:
+            return
+        metrics = list_widget.fontMetrics()
+        for index in range(list_widget.count()):
+            item = list_widget.item(index)
+            original = item.data(Qt.ItemDataRole.UserRole)
+            if original is None:
+                original = item.text()
+            elided = metrics.elidedText(str(original), Qt.TextElideMode.ElideMiddle, width)
+            item.setText(elided)
+
+    def _handle_source_double_click(self, item: QListWidgetItem) -> None:
+        path_data = item.data(Qt.ItemDataRole.UserRole + 1)
+        if not path_data:
+            return
+        self._add_selected_file(Path(str(path_data)))
+
+    def _add_selected_file(self, path: Path) -> None:
+        selected_tab = getattr(self, "selectedTab", None)
+        if selected_tab is None:
+            return
+        text_list: QListWidget | None = getattr(selected_tab, "textList", None)
+        image_list: QListWidget | None = getattr(selected_tab, "imageList", None)
+        path_str = str(path)
+        if path_str in self._selected_paths:
+            self.tabs.setCurrentWidget(self.selectedTab)
+            return
+
+        item = QListWidgetItem(path.name)
+        item.setData(Qt.ItemDataRole.UserRole, path.name)
+        item.setData(Qt.ItemDataRole.UserRole + 1, path_str)
+        item.setToolTip(path_str)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        image_extensions = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        if path.suffix.lower() in image_extensions:
+            pixmap = QPixmap(path_str)
+            if not pixmap.isNull():
+                thumbnail = pixmap.scaled(
+                    image_list.iconSize() if image_list is not None else QSize(self._image_icon_size, self._image_icon_size),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                item.setIcon(QIcon(thumbnail))
+            if image_list is not None:
+                image_list.addItem(item)
+        else:
+            if text_list is not None:
+                text_list.addItem(item)
+                self._adjust_text_list_height(text_list)
+        self._selected_paths.add(path_str)
+        self._refresh_selected_captions()
+        self.tabs.setCurrentWidget(self.selectedTab)
+
+    def _remove_selected_items(self) -> None:
+        selected_tab = getattr(self, "selectedTab", None)
+        if selected_tab is None:
+            return
+        text_list: QListWidget | None = getattr(selected_tab, "textList", None)
+        image_list: QListWidget | None = getattr(selected_tab, "imageList", None)
+        lists = [lst for lst in (text_list, image_list) if lst is not None]
+        for lst in lists:
+            for item in lst.selectedItems():
+                self._remove_selected_item(item, lst)
+
+    def _remove_selected_item(self, item: QListWidgetItem, list_widget: QListWidget) -> None:
+        path_data = item.data(Qt.ItemDataRole.UserRole + 1)
+        if path_data:
+            path_str = str(path_data)
+            if path_str in self._selected_paths:
+                self._selected_paths.remove(path_str)
+        list_widget.takeItem(list_widget.row(item))
+        if list_widget in self._text_lists:
+            self._adjust_text_list_height(list_widget)
+        self._refresh_selected_captions()
+
+    def update_source_status(self, message: str) -> None:
+        status_label = getattr(self.sourcePanel, "statusLabel", None)
+        if status_label is not None:
+            status_label.setText(message)
 
     def apply_config(self, namespace: str, data: dict[str, object]) -> None:
         if namespace == "image":
-            self.configPanel.apply_config(data)
             self.settingsTab.apply_config(namespace, data)
-
-    def update_viewer(self, viewer: QWidget, *, title: str | None = None, message: str | None = None) -> None:
-        caption = getattr(viewer, "captionLabel", None)
-        placeholder = getattr(viewer, "placeholderLabel", None)
-        if title and caption is not None:
-            caption.setText(title)
-        if message and placeholder is not None:
-            placeholder.setText(message)
-
-    def update_left_viewer(self, title: str, message: str) -> None:
-        self.update_viewer(self.leftViewer, title=title, message=message)
-
-    def update_right_viewer(self, title: str, message: str) -> None:
-        self.update_viewer(self.rightViewer, title=title, message=message)
 
     def prompt_text(self) -> str:
         return self.promptEdit.toPlainText()
@@ -215,3 +518,33 @@ class MainWindow(QMainWindow):
             if selected:
                 return Path(selected[0])
         return None
+
+    def _register_text_list(self, list_widget: QListWidget) -> None:
+        self._text_lists.append(list_widget)
+        list_widget.installEventFilter(self)
+
+    def _adjust_text_list_height(self, list_widget: QListWidget | None) -> None:
+        if list_widget is None:
+            return
+        count = list_widget.count()
+        if count == 0:
+            list_widget.setVisible(False)
+            list_widget.setFixedHeight(0)
+            return
+
+        list_widget.setVisible(True)
+        grid_size = list_widget.gridSize()
+        grid_width = grid_size.width() or list_widget.viewport().width()
+        grid_height = grid_size.height() or list_widget.sizeHintForRow(0) or 38
+
+        viewport_width = list_widget.viewport().width() or grid_width
+        columns = max(1, viewport_width // max(grid_width, 1))
+        rows = ceil(count / columns)
+        total_height = rows * grid_height + max(0, (rows - 1) * list_widget.spacing())
+        frame_padding = list_widget.frameWidth() * 2
+        list_widget.setFixedHeight(total_height + frame_padding)
+
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        if event.type() == QEvent.Type.Resize and obj in self._text_lists:
+            self._adjust_text_list_height(obj)  # type: ignore[arg-type]
+        return super().eventFilter(obj, event)
