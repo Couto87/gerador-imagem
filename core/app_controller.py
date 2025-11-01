@@ -274,8 +274,8 @@ class AppController:
                     "content": content_parts,
                 }
             ],
+            instructions=system_prompt,
             response_format={"type": "json_object"},
-            system=system_prompt,
         )
 
         content = getattr(resp, "output_text", None)
