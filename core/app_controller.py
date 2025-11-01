@@ -308,7 +308,10 @@ class AppController:
             elif suffix in IMAGE_EXTENSIONS:
                 file_id = self._ensure_openai_file_id(path, client)
                 if file_id:
-                    image_contents.append({"type": "input_image", "file_id": file_id})
+                    image_contents.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"file_id:{file_id}"}
+                    })
                     image_names.append(path.name)
         return text_entries, image_contents, image_names
 
