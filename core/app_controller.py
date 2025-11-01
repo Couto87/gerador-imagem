@@ -1,15 +1,16 @@
 """High level controller that wires managers and the UI together."""
 from __future__ import annotations
 
+import base64
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Iterable, List, Tuple
 from pathlib import Path
 
 from PyQt6.QtWidgets import QMessageBox
 
 from .config_manager import ConfigManager
-from .image_manager import ImageManager
+from .image_manager import IMAGE_EXTENSIONS, TEXT_EXTENSIONS, ImageManager
 from ui.main_window import MainWindow
 
 try:  # pragma: no cover - optional dependency import guard
@@ -90,8 +91,10 @@ class AppController:
             )
             return
 
+        selected_files = self.window.selected_files()
+
         try:
-            response_payload = self._generate_music_storyboard(prompt)
+            response_payload = self._generate_music_storyboard(prompt, selected_files)
         except ValueError as exc:
             QMessageBox.warning(
                 self.window,
@@ -171,8 +174,27 @@ class AppController:
             self._openai_client = OpenAI(api_key=api_key)
         return self._openai_client
 
-    def _generate_music_storyboard(self, lyrics: str) -> Dict[str, Any]:
+    def _generate_music_storyboard(
+        self, lyrics: str, selected_files: Iterable[Path]
+    ) -> Dict[str, Any]:
         client = self._ensure_openai_client()
+        text_entries, image_contents, image_names = self._prepare_media_payloads(
+            selected_files
+        )
+        user_sections: List[str] = [f"Letra fornecida pelo usuário:\n{lyrics}"]
+        if text_entries:
+            for name, content in text_entries:
+                user_sections.append(
+                    f"Conteúdo adicional do arquivo {name}:\n{content}"
+                )
+        if image_names:
+            user_sections.append(
+                "As imagens anexadas devem servir como referência visual. "
+                f"Arquivos: {', '.join(image_names)}."
+            )
+        user_text = "\n\n".join(user_sections)
+        user_content: List[Dict[str, str]] = [{"type": "text", "text": user_text}]
+        user_content.extend(image_contents)
         system_prompt = (
             "Você é um diretor de arte e criador de prompts visuais cinematográficos "
             "especializado em transformar letras de música em cenas ilustradas.\n"
@@ -243,7 +265,7 @@ class AppController:
             model="gpt-5",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": lyrics},
+                {"role": "user", "content": user_content},
             ],
             response_format={"type": "json_object"},
         )
@@ -261,6 +283,51 @@ class AppController:
         if not isinstance(payload, dict):
             raise RuntimeError("O conteúdo retornado não está no formato esperado.")
         return payload
+
+    def _prepare_media_payloads(
+        self, files: Iterable[Path]
+    ) -> Tuple[List[Tuple[str, str]], List[Dict[str, str]], List[str]]:
+        text_entries: List[Tuple[str, str]] = []
+        image_contents: List[Dict[str, str]] = []
+        image_names: List[str] = []
+
+        for path in files:
+            suffix = path.suffix.lower()
+            if suffix in TEXT_EXTENSIONS:
+                try:
+                    content = path.read_text(encoding="utf-8", errors="replace").strip()
+                except OSError:
+                    continue
+                if content:
+                    text_entries.append((path.name, content))
+            elif suffix in IMAGE_EXTENSIONS:
+                try:
+                    data = path.read_bytes()
+                except OSError:
+                    continue
+                if not data:
+                    continue
+                mime = self._guess_image_mime(suffix)
+                encoded = base64.b64encode(data).decode("ascii")
+                image_contents.append(
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:{mime};base64,{encoded}",
+                    }
+                )
+                image_names.append(path.name)
+        return text_entries, image_contents, image_names
+
+    @staticmethod
+    def _guess_image_mime(suffix: str) -> str:
+        mapping = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+        }
+        return mapping.get(suffix.lower(), "application/octet-stream")
 
     def _print_music_response(self, payload: Dict[str, Any]) -> None:
         print("\n=== Resultado da geração de conteúdo (música) ===")
