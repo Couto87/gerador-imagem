@@ -1,11 +1,10 @@
 """High level controller that wires managers and the UI together."""
 from __future__ import annotations
 
-import base64
 import json
 import os
-from typing import Any, Dict, Iterable, List, Tuple
 from pathlib import Path
+from typing import Any, Dict, Iterable, List, Tuple
 
 from PyQt6.QtWidgets import QMessageBox
 
@@ -17,6 +16,12 @@ try:  # pragma: no cover - optional dependency import guard
     from openai import OpenAI  # type: ignore
 except Exception:  # pragma: no cover - handled gracefully during runtime
     OpenAI = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency import guard
+    from PIL import Image, PngImagePlugin  # type: ignore
+except Exception:  # pragma: no cover - optional dependency import guard
+    Image = None  # type: ignore
+    PngImagePlugin = None  # type: ignore
 
 
 class AppController:
@@ -179,7 +184,7 @@ class AppController:
     ) -> Dict[str, Any]:
         client = self._ensure_openai_client()
         text_entries, image_contents, image_names = self._prepare_media_payloads(
-            selected_files
+            selected_files, client
         )
         user_sections: List[str] = [f"Letra fornecida pelo usuário:\n{lyrics}"]
         if text_entries:
@@ -285,7 +290,7 @@ class AppController:
         return payload
 
     def _prepare_media_payloads(
-        self, files: Iterable[Path]
+        self, files: Iterable[Path], client: Any
     ) -> Tuple[List[Tuple[str, str]], List[Dict[str, str]], List[str]]:
         text_entries: List[Tuple[str, str]] = []
         image_contents: List[Dict[str, str]] = []
@@ -301,33 +306,150 @@ class AppController:
                 if content:
                     text_entries.append((path.name, content))
             elif suffix in IMAGE_EXTENSIONS:
-                try:
-                    data = path.read_bytes()
-                except OSError:
-                    continue
-                if not data:
-                    continue
-                mime = self._guess_image_mime(suffix)
-                encoded = base64.b64encode(data).decode("ascii")
-                image_contents.append(
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:{mime};base64,{encoded}",
-                    }
-                )
-                image_names.append(path.name)
+                file_id = self._ensure_openai_file_id(path, client)
+                if file_id:
+                    image_contents.append({"type": "input_image", "file_id": file_id})
+                    image_names.append(path.name)
         return text_entries, image_contents, image_names
 
+    def _ensure_openai_file_id(self, path: Path, client: Any) -> str | None:
+        file_id = self._read_image_metadata(path)
+        if file_id:
+            return file_id
+
+        try:
+            with path.open("rb") as file_content:
+                result = client.files.create(file=file_content, purpose="vision")
+        except Exception:
+            return None
+
+        file_id = getattr(result, "id", None)
+        if isinstance(file_id, str) and file_id:
+            self._write_image_metadata(path, file_id)
+            return file_id
+        return None
+
+    def _read_image_metadata(self, path: Path) -> str | None:
+        suffix = path.suffix.lower()
+
+        if Image is None:  # pragma: no cover - fallback when Pillow isn't installed
+            return self._read_sidecar_metadata(path)
+
+        if suffix == ".png" and PngImagePlugin is not None:
+            try:
+                with Image.open(path) as image:
+                    value = image.info.get("IDOPENAI")  # type: ignore[attr-defined]
+                    if isinstance(value, str) and value:
+                        return value
+            except Exception:
+                pass
+            return self._read_sidecar_metadata(path)
+        elif suffix in {".jpg", ".jpeg", ".webp"}:
+            value = self._read_exif_user_comment(path)
+            if value:
+                return value
+            return self._read_sidecar_metadata(path)
+        elif suffix == ".bmp":
+            return self._read_sidecar_metadata(path)
+
+        return None
+
+    def _write_image_metadata(self, path: Path, file_id: str) -> None:
+        suffix = path.suffix.lower()
+
+        if Image is None:  # pragma: no cover - fallback when Pillow isn't installed
+            self._write_sidecar_metadata(path, file_id)
+            return
+
+        if suffix == ".png" and PngImagePlugin is not None:
+            self._write_png_metadata(path, file_id)
+        elif suffix in {".jpg", ".jpeg", ".webp"}:
+            self._write_exif_user_comment(path, file_id)
+        elif suffix == ".bmp":
+            self._write_sidecar_metadata(path, file_id)
+
+    def _read_exif_user_comment(self, path: Path) -> str | None:
+        if Image is None:  # pragma: no cover - fallback guard
+            return None
+
+        try:
+            with Image.open(path) as image:
+                exif = image.getexif()
+        except Exception:
+            return None
+
+        if not exif:
+            return None
+
+        raw_value = exif.get(0x9286)
+        if isinstance(raw_value, bytes) and raw_value:
+            if raw_value.startswith(b"ASCII\0\0\0"):
+                raw_value = raw_value[8:]
+            try:
+                return raw_value.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                try:
+                    return raw_value.decode("latin-1").strip()
+                except UnicodeDecodeError:
+                    return None
+        if isinstance(raw_value, str) and raw_value:
+            return raw_value.strip()
+        return None
+
+    def _write_exif_user_comment(self, path: Path, file_id: str) -> None:
+        if Image is None:  # pragma: no cover - fallback guard
+            return
+
+        try:
+            with Image.open(path) as image:
+                exif = image.getexif()
+                exif[0x9286] = b"ASCII\0\0\0" + file_id.encode("utf-8")
+                image.save(path, exif=exif.tobytes())
+        except Exception:
+            self._write_sidecar_metadata(path, file_id)
+
+    def _write_png_metadata(self, path: Path, file_id: str) -> None:
+        if Image is None or PngImagePlugin is None:  # pragma: no cover - fallback guard
+            self._write_sidecar_metadata(path, file_id)
+            return
+
+        try:
+            with Image.open(path) as image:
+                png_info = PngImagePlugin.PngInfo()
+                for key, value in image.info.items():
+                    if isinstance(value, str):
+                        png_info.add_text(key, value)
+                png_info.add_text("IDOPENAI", file_id)
+                image.save(path, pnginfo=png_info)
+        except Exception:
+            self._write_sidecar_metadata(path, file_id)
+
+    def _read_sidecar_metadata(self, path: Path) -> str | None:
+        metadata_path = self._metadata_sidecar_path(path)
+        if not metadata_path.exists():
+            return None
+
+        try:
+            data = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+        value = data.get("IDOPENAI")
+        if isinstance(value, str) and value:
+            return value
+        return None
+
+    def _write_sidecar_metadata(self, path: Path, file_id: str) -> None:
+        metadata_path = self._metadata_sidecar_path(path)
+        payload = {"IDOPENAI": file_id}
+        try:
+            metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+        except OSError:
+            pass
+
     @staticmethod
-    def _guess_image_mime(suffix: str) -> str:
-        mapping = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".webp": "image/webp",
-            ".bmp": "image/bmp",
-        }
-        return mapping.get(suffix.lower(), "application/octet-stream")
+    def _metadata_sidecar_path(path: Path) -> Path:
+        return path.with_suffix(path.suffix + ".metadata.json")
 
     def _print_music_response(self, payload: Dict[str, Any]) -> None:
         print("\n=== Resultado da geração de conteúdo (música) ===")
