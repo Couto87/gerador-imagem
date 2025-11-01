@@ -275,7 +275,10 @@ class AppController:
                 }
             ],
             instructions=system_prompt,
-            response_format={"type": "json_object"},
+            text={
+                "format": {"type": "json_object"},
+                "verbosity": "medium",
+            },
         )
 
         content = getattr(resp, "output_text", None)
