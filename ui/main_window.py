@@ -278,6 +278,10 @@ class MainWindow(QMainWindow):
             self.promptSubmitted.emit(text)
 
     # Public helpers -----------------------------------------------------
+    def selected_files(self) -> list[Path]:
+        """Return the currently selected media files."""
+        return [Path(path) for path in sorted(self._selected_paths)]
+
     def set_source_folder(self, folder: Path) -> None:
         path_label = getattr(self.sourcePanel, "pathLabel", None)
         if path_label is not None:
