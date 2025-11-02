@@ -5,12 +5,12 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from PyQt6.QtWidgets import QMessageBox
 
 from .config_manager import ConfigManager
-from .image_manager import ImageManager
+from .image_manager import IMAGE_EXTENSIONS, TEXT_EXTENSIONS, ImageManager
 from ui.main_window import MainWindow
 
 try:
@@ -22,6 +22,17 @@ try:
     from openai import OpenAI
 except ImportError:  # pragma: no cover - optional dependency
     OpenAI = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
+    from PIL import Image, PngImagePlugin
+except ImportError:  # pragma: no cover - optional dependency
+    Image = None  # type: ignore[assignment]
+    PngImagePlugin = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
+    from PIL import UnidentifiedImageError
+except ImportError:  # pragma: no cover - optional dependency
+    UnidentifiedImageError = Exception  # type: ignore[assignment]
 
 
 class AppController:
@@ -177,16 +188,199 @@ class AppController:
             self._openai_client = OpenAI()
         return self._openai_client
 
+    # Metadata helpers -------------------------------------------------
+    def _load_sidecar_metadata(self, path: Path) -> Dict[str, str]:
+        metadata_path = path.with_suffix(path.suffix + ".meta.json")
+        if not metadata_path.exists():
+            return {}
+        try:
+            data = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return {str(k): str(v) for k, v in data.items() if isinstance(k, str)}
+
+    def _save_sidecar_metadata(self, path: Path, data: Dict[str, str]) -> None:
+        metadata_path = path.with_suffix(path.suffix + ".meta.json")
+        try:
+            metadata_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _decode_exif_user_comment(self, value: Any) -> str:
+        if isinstance(value, bytes):
+            prefixes = (
+                b"ASCII\0\0\0",
+                b"JIS\0\0\0\0",
+                b"UNICODE\0",
+            )
+            for prefix in prefixes:
+                if value.startswith(prefix):
+                    value = value[len(prefix) :]
+                    break
+            try:
+                return value.decode("utf-8", "ignore")
+            except Exception:
+                return ""
+        if isinstance(value, str):
+            return value
+        return ""
+
+    def _encode_exif_user_comment(self, data: Dict[str, str]) -> bytes:
+        payload = json.dumps(data, ensure_ascii=False)
+        return b"UNICODE\0" + payload.encode("utf-8")
+
+    def _load_image_metadata(self, path: Path) -> Dict[str, str]:
+        metadata: Dict[str, str] = {}
+        metadata.update(self._load_sidecar_metadata(path))
+        if Image is None:
+            return metadata
+
+        suffix = path.suffix.lower()
+        try:
+            with Image.open(path) as img:
+                if suffix == ".png":
+                    for key, value in img.info.items():
+                        if isinstance(key, str) and isinstance(value, str):
+                            metadata.setdefault(key, value)
+                elif suffix in {".jpg", ".jpeg", ".webp"}:
+                    exif = img.getexif()
+                    if exif:
+                        decoded = self._decode_exif_user_comment(exif.get(0x9286))
+                        if decoded:
+                            try:
+                                payload = json.loads(decoded)
+                                if isinstance(payload, dict):
+                                    for key, value in payload.items():
+                                        if isinstance(key, str) and isinstance(value, str):
+                                            metadata.setdefault(key, value)
+                            except json.JSONDecodeError:
+                                metadata.setdefault("IDOPENAI", decoded)
+        except (OSError, UnidentifiedImageError):  # pragma: no cover - best effort only
+            return metadata
+        return metadata
+
+    def _write_png_metadata(self, path: Path, data: Dict[str, str]) -> bool:
+        if Image is None or PngImagePlugin is None:
+            return False
+        try:
+            with Image.open(path) as img:
+                pnginfo = PngImagePlugin.PngInfo()
+                for key, value in img.info.items():
+                    if isinstance(key, str) and isinstance(value, str):
+                        pnginfo.add_text(key, value)
+                for key, value in data.items():
+                    pnginfo.add_text(key, value)
+                img.save(path, pnginfo=pnginfo)
+            return True
+        except (OSError, UnidentifiedImageError):  # pragma: no cover - best effort only
+            return False
+
+    def _write_jpeg_like_metadata(self, path: Path, data: Dict[str, str]) -> bool:
+        if Image is None:
+            return False
+        try:
+            with Image.open(path) as img:
+                exif = img.getexif()
+                exif[0x9286] = self._encode_exif_user_comment(data)
+                img.save(path, exif=exif.tobytes())
+            return True
+        except (OSError, UnidentifiedImageError):  # pragma: no cover - best effort only
+            return False
+
+    def _write_image_metadata(self, path: Path, data: Dict[str, str]) -> None:
+        success = False
+        suffix = path.suffix.lower()
+        if suffix == ".png":
+            success = self._write_png_metadata(path, data)
+        elif suffix in {".jpg", ".jpeg", ".webp"}:
+            success = self._write_jpeg_like_metadata(path, data)
+
+        if not success:
+            merged = self._load_sidecar_metadata(path)
+            merged.update(data)
+            self._save_sidecar_metadata(path, merged)
+        else:
+            merged = self._load_sidecar_metadata(path)
+            merged.update(data)
+            self._save_sidecar_metadata(path, merged)
+
+    def _ensure_openai_file_id(self, path: Path, client: Any) -> str | None:
+        metadata = self._load_image_metadata(path)
+        existing = metadata.get("IDOPENAI")
+        if existing:
+            return existing
+
+        try:
+            with open(path, "rb") as buffer:
+                result = client.files.create(file=buffer, purpose="vision")
+        except OSError:
+            return None
+        except Exception:  # pragma: no cover - API errors
+            return None
+
+        file_id = getattr(result, "id", None)
+        if isinstance(file_id, str) and file_id:
+            self._write_image_metadata(path, {"IDOPENAI": file_id})
+            return file_id
+        return None
+
+    def _collect_selected_media(
+        self, client: Any
+    ) -> Tuple[List[Tuple[str, str]], List[Dict[str, Any]], List[Dict[str, str]]]:
+        texts: List[Tuple[str, str]] = []
+        image_contents: List[Dict[str, Any]] = []
+        image_refs: List[Dict[str, str]] = []
+
+        selected_files = self.window.selected_files()
+        for path in selected_files:
+            suffix = path.suffix.lower()
+            if suffix in TEXT_EXTENSIONS:
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+                texts.append((path.name, content))
+            elif suffix in IMAGE_EXTENSIONS:
+                file_id = self._ensure_openai_file_id(path, client)
+                if not file_id:
+                    continue
+                image_contents.append(
+                    {
+                        "type": "input_image",
+                        "file_id": file_id,
+                    }
+                )
+                image_refs.append({"nome": path.name, "file_id": file_id})
+
+        return texts, image_contents, image_refs
+
     def _request_storyboard(self, prompt: str) -> Dict[str, Any]:
         client = self._ensure_client()
 
-        envelope = {
+        texts, image_contents, image_refs = self._collect_selected_media(client)
+
+        envelope: Dict[str, Any] = {
             "tipo": "json",
             "conteudo": {
                 "mensagem": prompt,
             },
         }
+        if texts:
+            envelope["conteudo"]["arquivos_texto"] = [
+                {"nome": name, "conteudo": content} for name, content in texts
+            ]
+        if image_refs:
+            envelope["conteudo"]["referencias_imagem"] = image_refs
+
         json_text = json.dumps(envelope, ensure_ascii=False, indent=2) + "\n"
+
+        content_blocks: List[Dict[str, Any]] = [
+            {
+                "type": "input_text",
+                "text": json_text,
+            }
+        ]
+        content_blocks.extend(image_contents)
 
         response = client.responses.create(  # type: ignore[attr-defined]
             prompt={
@@ -196,12 +390,7 @@ class AppController:
             input=[
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": json_text,
-                        }
-                    ],
+                    "content": content_blocks,
                 }
             ],
             reasoning={"summary": "auto"},
