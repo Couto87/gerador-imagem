@@ -69,6 +69,7 @@ class AppController:
         self._openai_client: Any | None = None
         self._generation_thread: QThread | None = None
         self._generation_worker: _GenerationWorker | None = None
+        self._reference_image_blocks: List[Dict[str, Any]] = []
 
         self.window.configPanel.optionChanged.connect(self._on_option_changed)
         self.window.promptSubmitted.connect(self._on_prompt_submitted)
@@ -392,6 +393,10 @@ class AppController:
             client, selected_files
         )
 
+        self._reference_image_blocks = [
+            dict(block) for block in image_contents if isinstance(block, dict)
+        ]
+
         envelope: Dict[str, Any] = {
             "tipo": "json",
             "conteudo": {
@@ -500,6 +505,13 @@ class AppController:
 
         client = self._ensure_client()
         scenes: List[Dict[str, Any]] = payload.get("scenes", []) or []
+        reference_blocks = [
+            dict(block)
+            for block in getattr(self, "_reference_image_blocks", [])
+            if isinstance(block, dict)
+            and block.get("type") == "input_image"
+            and isinstance(block.get("file_id"), str)
+        ]
         for index, scene in enumerate(scenes, start=1):
             scene_id = scene.get("scene_id")
             if isinstance(scene_id, int) and scene_id >= 0:
@@ -517,9 +529,11 @@ class AppController:
                 print(f"Cena {prefix} ignorada: prompt vazio ou inválido.")
                 continue
 
+            final_prompt = self._prepare_image_prompt(prompt_text, reference_blocks, client)
+
             request: Dict[str, Any] = {
                 "model": "gpt-image-1",
-                "prompt": prompt_text,
+                "prompt": final_prompt,
                 "background": "transparent",
             }
             if size_option:
@@ -641,6 +655,58 @@ class AppController:
             return json.dumps({"prompt": prompt_data}, ensure_ascii=False)
         except TypeError:
             return ""
+
+    def _prepare_image_prompt(
+        self,
+        prompt_text: str,
+        reference_blocks: List[Dict[str, Any]],
+        client: Any,
+    ) -> str:
+        if not prompt_text.strip():
+            return prompt_text
+
+        if not reference_blocks:
+            return prompt_text
+
+        content_blocks: List[Dict[str, Any]] = [
+            {"type": "input_text", "text": prompt_text},
+        ]
+        content_blocks.extend(
+            {"type": block["type"], "file_id": block["file_id"]}
+            for block in reference_blocks
+            if block.get("type") == "input_image" and block.get("file_id")
+        )
+
+        if len(content_blocks) == 1:
+            return prompt_text
+
+        try:
+            response = client.responses.create(  # type: ignore[attr-defined]
+                model="gpt-4.1-mini",
+                input=[
+                    {
+                        "role": "user",
+                        "content": content_blocks,
+                    }
+                ],
+            )
+        except Exception:
+            return prompt_text
+
+        maybe_text = getattr(response, "output_text", None)
+        if isinstance(maybe_text, str):
+            cleaned = maybe_text.strip()
+            if cleaned:
+                return cleaned
+
+        if isinstance(response, dict):  # pragma: no cover - fallback for dict responses
+            maybe_text = response.get("output_text")
+            if isinstance(maybe_text, str):
+                cleaned = maybe_text.strip()
+                if cleaned:
+                    return cleaned
+
+        return prompt_text
 
     def _extract_image_base64(self, response: Any) -> str | None:
         data = getattr(response, "data", None)
