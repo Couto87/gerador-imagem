@@ -61,13 +61,35 @@ class AppController:
         self.window.apply_config(namespace, self.config_manager.data.get(namespace, {}))
 
     def _on_prompt_submitted(self, prompt: str) -> None:
+        generation_type = (
+            str(self.config_manager.get("image", "type", "Imagem")).strip().lower()
+        )
+
+        if generation_type == "imagem":
+            QMessageBox.information(
+                self.window,
+                "Função em desenvolvimento",
+                "A geração de imagens ainda está em desenvolvimento.",
+            )
+            return
+
+        if generation_type != "música":
+            QMessageBox.warning(
+                self.window,
+                "Tipo não suportado",
+                "O tipo selecionado ainda não é suportado para geração automática.",
+            )
+            return
+
+        self.window.clear_prompt()
         QMessageBox.information(
             self.window,
-            "Prompt recebido",
-            "Prompt recebido! Configure suas opções e utilize as integrações de IA "
-            "para gerar o conteúdo desejado.",
+            "Funcionalidade indisponível",
+            (
+                "A interface está disponível, mas a integração com a API foi removida. "
+                "Use apenas o front-end para organização dos arquivos."
+            ),
         )
-        self.window.clear_prompt()
 
     def _on_browse_folder(self) -> None:
         start = self.image_manager.current_directory or self.image_manager.root_path
