@@ -73,6 +73,7 @@ class AppController:
         self._generation_thread: QThread | None = None
         self._generation_worker: _GenerationWorker | None = None
         self._reference_image_blocks: List[Dict[str, Any]] = []
+        self._reference_image_paths: List[Path] = []
 
         self.window.configPanel.optionChanged.connect(self._on_option_changed)
         self.window.promptSubmitted.connect(self._on_prompt_submitted)
@@ -360,10 +361,16 @@ class AppController:
 
     def _collect_selected_media(
         self, client: Any, selected_files: List[Path]
-    ) -> Tuple[List[Tuple[str, str]], List[Dict[str, Any]], List[Dict[str, str]]]:
+    ) -> Tuple[
+        List[Tuple[str, str]],
+        List[Dict[str, Any]],
+        List[Dict[str, str]],
+        List[Path],
+    ]:
         texts: List[Tuple[str, str]] = []
         image_contents: List[Dict[str, Any]] = []
         image_refs: List[Dict[str, str]] = []
+        image_paths: List[Path] = []
 
         for path in selected_files:
             suffix = path.suffix.lower()
@@ -384,21 +391,28 @@ class AppController:
                     }
                 )
                 image_refs.append({"nome": path.name, "file_id": file_id})
+                image_paths.append(path)
 
-        return texts, image_contents, image_refs
+        return texts, image_contents, image_refs, image_paths
 
     def _request_storyboard(
         self, prompt: str, selected_files: List[Path]
     ) -> Dict[str, Any]:
         client = self._ensure_client()
 
-        texts, image_contents, image_refs = self._collect_selected_media(
+        (
+            texts,
+            image_contents,
+            image_refs,
+            image_paths,
+        ) = self._collect_selected_media(
             client, selected_files
         )
 
         self._reference_image_blocks = [
             dict(block) for block in image_contents if isinstance(block, dict)
         ]
+        self._reference_image_paths = list(image_paths)
 
         envelope: Dict[str, Any] = {
             "tipo": "json",
@@ -540,7 +554,7 @@ class AppController:
             )
 
             request: Dict[str, Any] = {
-                "model": "gpt-image-1",
+                "model": "gpt-image-1-mini",
                 "prompt": final_prompt,
                 "background": "transparent",
             }
@@ -552,6 +566,7 @@ class AppController:
             render_jobs.append({
                 "file_path": file_path,
                 "request": request,
+                "image_paths": list(self._reference_image_paths),
             })
 
         self._execute_image_batches(client, render_jobs)
@@ -593,10 +608,40 @@ class AppController:
         if not isinstance(request, dict) or not isinstance(file_path, Path):
             return False, "Dados inválidos para renderização da cena."
 
+        image_paths: List[Path] = []
+        raw_image_paths = job.get("image_paths", [])
+        if isinstance(raw_image_paths, list):
+            for path in raw_image_paths:
+                if isinstance(path, Path):
+                    image_paths.append(path)
+                elif isinstance(path, str):
+                    image_paths.append(Path(path))
+
+        request_payload = dict(request)
+        open_files: List[Any] = []
+
+        if image_paths:
+            image_handles: List[Any] = []
+            for path in image_paths:
+                try:
+                    handle = path.open("rb")
+                except OSError:
+                    continue
+                open_files.append(handle)
+                image_handles.append(handle)
+            if image_handles:
+                request_payload["image"] = image_handles
+
         try:
-            response = client.images.generate(**dict(request))  # type: ignore[attr-defined]
+            response = client.images.generate(**request_payload)  # type: ignore[attr-defined]
         except Exception as exc:  # pragma: no cover - API errors
             return False, f"Falha ao gerar a imagem '{file_path.name}': {exc}"
+        finally:
+            for handle in open_files:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
 
         b64_data = self._extract_image_base64(response)
         if not b64_data:
