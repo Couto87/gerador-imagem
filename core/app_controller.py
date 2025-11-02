@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox
 
 from .config_manager import ConfigManager
@@ -35,6 +36,27 @@ except ImportError:  # pragma: no cover - optional dependency
     UnidentifiedImageError = Exception  # type: ignore[assignment]
 
 
+class _GenerationWorker(QObject):
+    finished = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(self, controller: "AppController", prompt: str, selected_files: List[Path]) -> None:
+        super().__init__()
+        self._controller = controller
+        self._prompt = prompt
+        self._selected_files = selected_files
+
+    def run(self) -> None:
+        try:
+            payload = self._controller._request_storyboard(
+                self._prompt, self._selected_files
+            )
+        except Exception as exc:  # pragma: no cover - worker thread feedback
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(payload)
+
+
 class AppController:
     def __init__(self) -> None:
         self.config_manager = ConfigManager()
@@ -43,6 +65,8 @@ class AppController:
 
         self.output_directory: Path | None = None
         self._openai_client: Any | None = None
+        self._generation_thread: QThread | None = None
+        self._generation_worker: _GenerationWorker | None = None
 
         self.window.configPanel.optionChanged.connect(self._on_option_changed)
         self.window.promptSubmitted.connect(self._on_prompt_submitted)
@@ -107,27 +131,30 @@ class AppController:
             )
             return
 
-        self.window.clear_prompt()
-        try:
-            payload = self._request_storyboard(prompt)
-        except Exception as exc:  # pragma: no cover - UI feedback only
-            QMessageBox.critical(
+        if self._generation_thread is not None:
+            QMessageBox.information(
                 self.window,
-                "Erro ao gerar conteúdo",
-                f"Não foi possível gerar o conteúdo solicitado.\n\nDetalhes: {exc}",
+                "Processo em andamento",
+                "Já existe uma requisição em andamento. Aguarde a conclusão antes de iniciar outra.",
             )
             return
 
-        self._print_storyboard(payload)
-        self._save_storyboard_files(payload)
-        QMessageBox.information(
-            self.window,
-            "Geração concluída",
-            (
-                "A resposta da API foi processada com sucesso. "
-                "Confira o terminal para visualizar os prompts detalhados."
-            ),
-        )
+        self.window.clear_prompt()
+        self.window.begin_generation_progress()
+
+        selected_files = list(self.window.selected_files())
+
+        worker = _GenerationWorker(self, prompt, selected_files)
+        thread = QThread()
+        worker.moveToThread(thread)
+        worker.finished.connect(self._handle_generation_success)
+        worker.failed.connect(self._handle_generation_failure)
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+        self._generation_thread = thread
+        self._generation_worker = worker
 
     def _on_browse_folder(self) -> None:
         start = self.image_manager.current_directory or self.image_manager.root_path
@@ -326,13 +353,12 @@ class AppController:
         return None
 
     def _collect_selected_media(
-        self, client: Any
+        self, client: Any, selected_files: List[Path]
     ) -> Tuple[List[Tuple[str, str]], List[Dict[str, Any]], List[Dict[str, str]]]:
         texts: List[Tuple[str, str]] = []
         image_contents: List[Dict[str, Any]] = []
         image_refs: List[Dict[str, str]] = []
 
-        selected_files = self.window.selected_files()
         for path in selected_files:
             suffix = path.suffix.lower()
             if suffix in TEXT_EXTENSIONS:
@@ -355,10 +381,14 @@ class AppController:
 
         return texts, image_contents, image_refs
 
-    def _request_storyboard(self, prompt: str) -> Dict[str, Any]:
+    def _request_storyboard(
+        self, prompt: str, selected_files: List[Path]
+    ) -> Dict[str, Any]:
         client = self._ensure_client()
 
-        texts, image_contents, image_refs = self._collect_selected_media(client)
+        texts, image_contents, image_refs = self._collect_selected_media(
+            client, selected_files
+        )
 
         envelope: Dict[str, Any] = {
             "tipo": "json",
@@ -480,4 +510,57 @@ class AppController:
                 file_path.write_text("", encoding="utf-8")
             except OSError:
                 print(f"Não foi possível criar o arquivo: {file_path}")
+
+    def _handle_generation_success(self, payload: Dict[str, Any]) -> None:
+        elapsed_message = None
+        if self.window is not None:
+            elapsed_seconds = getattr(self.window, "_generation_elapsed", 0)
+            if isinstance(elapsed_seconds, int) and elapsed_seconds > 0:
+                elapsed_message = f"Concluído em {elapsed_seconds} s"
+
+        self.window.finish_generation_progress(message=elapsed_message)
+        self._finalize_generation_thread()
+
+        self._print_storyboard(payload)
+        self._save_storyboard_files(payload)
+        QMessageBox.information(
+            self.window,
+            "Geração concluída",
+            (
+                "A resposta da API foi processada com sucesso. "
+                "Confira o terminal para visualizar os prompts detalhados."
+            ),
+        )
+
+    def _handle_generation_failure(self, error_message: str) -> None:
+        elapsed_message = None
+        if self.window is not None:
+            elapsed_seconds = getattr(self.window, "_generation_elapsed", 0)
+            if isinstance(elapsed_seconds, int) and elapsed_seconds > 0:
+                elapsed_message = f"Falha após {elapsed_seconds} s"
+
+        self.window.finish_generation_progress(message=elapsed_message)
+        self._finalize_generation_thread()
+        QMessageBox.critical(
+            self.window,
+            "Erro ao gerar conteúdo",
+            (
+                "Não foi possível gerar o conteúdo solicitado."
+                f"\n\nDetalhes: {error_message}"
+            ),
+        )
+
+    def _finalize_generation_thread(self) -> None:
+        thread = self._generation_thread
+        worker = self._generation_worker
+
+        self._generation_thread = None
+        self._generation_worker = None
+
+        if worker is not None:
+            worker.deleteLater()
+
+        if thread is not None:
+            thread.quit()
+            thread.wait()
 

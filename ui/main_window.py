@@ -5,7 +5,7 @@ from pathlib import Path
 from math import ceil
 from typing import Callable, Iterable
 
-from PyQt6.QtCore import QEvent, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -45,6 +45,10 @@ class MainWindow(QMainWindow):
         self._selected_paths: set[str] = set()
         self._text_lists: list[QListWidget] = []
         self._max_text_rows = 4
+        self._generation_timer = QTimer(self)
+        self._generation_timer.setInterval(1000)
+        self._generation_timer.timeout.connect(self._update_generation_progress)
+        self._generation_elapsed = 0
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -87,6 +91,7 @@ class MainWindow(QMainWindow):
 
         composer = self._create_composer()
         center_layout.addWidget(composer)
+        self._composer = composer
 
         center_layout.setStretch(0, 0)
         center_layout.setStretch(1, 1)
@@ -270,12 +275,71 @@ class MainWindow(QMainWindow):
         actions.addStretch(1)
         actions.addWidget(generate)
         layout.addLayout(actions)
+
+        progress = QLabel()
+        progress.setObjectName("ComposerProgressLabel")
+        progress.setVisible(False)
+        layout.addWidget(progress)
+
+        frame.generateButton = generate  # type: ignore[attr-defined]
+        frame.progressLabel = progress  # type: ignore[attr-defined]
         return frame
 
     def _emit_prompt(self) -> None:
         text = self.promptEdit.toPlainText().strip()
         if text:
             self.promptSubmitted.emit(text)
+
+    def begin_generation_progress(self) -> None:
+        composer_widget: QWidget | None = getattr(self, "_composer", None)
+        generate_button: QPushButton | None = None
+        progress_label: QLabel | None = None
+        if composer_widget is not None:
+            generate_button = getattr(composer_widget, "generateButton", None)
+            progress_label = getattr(composer_widget, "progressLabel", None)
+
+        if generate_button is not None:
+            generate_button.setEnabled(False)
+
+        if progress_label is not None:
+            self._generation_elapsed = 0
+            progress_label.setText("Gerando conteúdo… 0 s")
+            progress_label.setVisible(True)
+            self._generation_timer.start()
+
+    def finish_generation_progress(self, *, message: str | None = None) -> None:
+        if self._generation_timer.isActive():
+            self._generation_timer.stop()
+
+        composer_widget: QWidget | None = getattr(self, "_composer", None)
+        generate_button: QPushButton | None = None
+        progress_label: QLabel | None = None
+        if composer_widget is not None:
+            generate_button = getattr(composer_widget, "generateButton", None)
+            progress_label = getattr(composer_widget, "progressLabel", None)
+
+        if generate_button is not None:
+            generate_button.setEnabled(True)
+
+        if progress_label is not None:
+            if message:
+                progress_label.setText(message)
+                progress_label.setVisible(True)
+            else:
+                progress_label.setVisible(False)
+                return
+
+    def _update_generation_progress(self) -> None:
+        self._generation_elapsed += 1
+        composer_widget = getattr(self, "_composer", None)
+        if composer_widget is None:
+            return
+        progress_label: QLabel | None = getattr(composer_widget, "progressLabel", None)
+        if progress_label is None:
+            return
+        progress_label.setText(
+            f"Gerando conteúdo… {self._generation_elapsed} s"
+        )
 
     # Public helpers -----------------------------------------------------
     def selected_files(self) -> list[Path]:
