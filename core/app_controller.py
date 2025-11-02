@@ -73,7 +73,6 @@ class AppController:
         self._generation_thread: QThread | None = None
         self._generation_worker: _GenerationWorker | None = None
         self._reference_image_blocks: List[Dict[str, Any]] = []
-        self._reference_image_paths: List[Path] = []
 
         self.window.configPanel.optionChanged.connect(self._on_option_changed)
         self.window.promptSubmitted.connect(self._on_prompt_submitted)
@@ -365,12 +364,10 @@ class AppController:
         List[Tuple[str, str]],
         List[Dict[str, Any]],
         List[Dict[str, str]],
-        List[Path],
     ]:
         texts: List[Tuple[str, str]] = []
         image_contents: List[Dict[str, Any]] = []
         image_refs: List[Dict[str, str]] = []
-        image_paths: List[Path] = []
 
         for path in selected_files:
             suffix = path.suffix.lower()
@@ -391,28 +388,21 @@ class AppController:
                     }
                 )
                 image_refs.append({"nome": path.name, "file_id": file_id})
-                image_paths.append(path)
 
-        return texts, image_contents, image_refs, image_paths
+        return texts, image_contents, image_refs
 
     def _request_storyboard(
         self, prompt: str, selected_files: List[Path]
     ) -> Dict[str, Any]:
         client = self._ensure_client()
 
-        (
-            texts,
-            image_contents,
-            image_refs,
-            image_paths,
-        ) = self._collect_selected_media(
+        texts, image_contents, image_refs = self._collect_selected_media(
             client, selected_files
         )
 
         self._reference_image_blocks = [
             dict(block) for block in image_contents if isinstance(block, dict)
         ]
-        self._reference_image_paths = list(image_paths)
 
         envelope: Dict[str, Any] = {
             "tipo": "json",
@@ -553,21 +543,15 @@ class AppController:
                 prompt_text, reference_blocks, client
             )
 
-            request: Dict[str, Any] = {
-                "model": "gpt-image-1-mini",
-                "prompt": final_prompt,
-                "background": "transparent",
-            }
-            if size_option:
-                request["size"] = size_option
-            if quality_option:
-                request["quality"] = quality_option
-
-            render_jobs.append({
-                "file_path": file_path,
-                "request": request,
-                "image_paths": list(self._reference_image_paths),
-            })
+            render_jobs.append(
+                {
+                    "file_path": file_path,
+                    "prompt": final_prompt,
+                    "image_blocks": [dict(block) for block in reference_blocks],
+                    "size": size_option,
+                    "quality": quality_option,
+                }
+            )
 
         self._execute_image_batches(client, render_jobs)
 
@@ -604,44 +588,56 @@ class AppController:
         self, client: Any, job: Dict[str, Any]
     ) -> Tuple[bool, str]:
         file_path = job.get("file_path")
-        request = job.get("request", {})
-        if not isinstance(request, dict) or not isinstance(file_path, Path):
-            return False, "Dados inválidos para renderização da cena."
+        prompt_text = job.get("prompt")
+        if not isinstance(prompt_text, str) or not prompt_text.strip():
+            return False, "Prompt inválido para renderização da cena."
 
-        image_paths: List[Path] = []
-        raw_image_paths = job.get("image_paths", [])
-        if isinstance(raw_image_paths, list):
-            for path in raw_image_paths:
-                if isinstance(path, Path):
-                    image_paths.append(path)
-                elif isinstance(path, str):
-                    image_paths.append(Path(path))
+        if not isinstance(file_path, Path):
+            return False, "Caminho de arquivo inválido para salvar a cena."
 
-        request_payload = dict(request)
-        open_files: List[Any] = []
-
-        if image_paths:
-            image_handles: List[Any] = []
-            for path in image_paths:
-                try:
-                    handle = path.open("rb")
-                except OSError:
+        raw_blocks = job.get("image_blocks", [])
+        image_blocks: List[Dict[str, Any]] = []
+        if isinstance(raw_blocks, list):
+            for block in raw_blocks:
+                if not isinstance(block, dict):
                     continue
-                open_files.append(handle)
-                image_handles.append(handle)
-            if image_handles:
-                request_payload["image"] = image_handles
+                file_id = block.get("file_id")
+                if isinstance(file_id, str) and file_id:
+                    image_blocks.append({"type": "input_image", "file_id": file_id})
+
+        content_blocks: List[Dict[str, Any]] = [
+            {"type": "input_text", "text": prompt_text}
+        ]
+        content_blocks.extend(image_blocks)
+
+        request_payload: Dict[str, Any] = {
+            "model": "gpt-5",
+            "input": [
+                {
+                    "role": "user",
+                    "content": content_blocks,
+                }
+            ],
+            "tools": [{"type": "image_generation"}],
+        }
+
+        tool_config: Dict[str, Any] = {}
+        size_value = job.get("size")
+        quality_value = job.get("quality")
+        image_generation_config: Dict[str, Any] = {}
+        if isinstance(size_value, str) and size_value:
+            image_generation_config["size"] = size_value
+        if isinstance(quality_value, str) and quality_value:
+            image_generation_config["quality"] = quality_value
+        if image_generation_config:
+            tool_config["image_generation"] = image_generation_config
+        if tool_config:
+            request_payload["tool_config"] = tool_config
 
         try:
-            response = client.images.generate(**request_payload)  # type: ignore[attr-defined]
+            response = client.responses.create(**request_payload)  # type: ignore[attr-defined]
         except Exception as exc:  # pragma: no cover - API errors
             return False, f"Falha ao gerar a imagem '{file_path.name}': {exc}"
-        finally:
-            for handle in open_files:
-                try:
-                    handle.close()
-                except Exception:
-                    pass
 
         b64_data = self._extract_image_base64(response)
         if not b64_data:
@@ -775,7 +771,7 @@ class AppController:
 
         try:
             response = client.responses.create(  # type: ignore[attr-defined]
-                model="gpt-4.1-mini",
+                model="gpt-5",
                 input=[
                     {
                         "role": "user",
@@ -805,31 +801,29 @@ class AppController:
         return prompt_text
 
     def _extract_image_base64(self, response: Any) -> str | None:
-        data = getattr(response, "data", None)
-        if isinstance(data, list) and data:
-            first = data[0]
-            b64_data = getattr(first, "b64_json", None)
-            if isinstance(b64_data, str) and b64_data:
-                return b64_data
-            if isinstance(first, dict):
-                maybe_data = first.get("b64_json")
-                if isinstance(maybe_data, str) and maybe_data:
-                    return maybe_data
+        outputs = getattr(response, "output", None)
+        if isinstance(outputs, list):
+            for item in outputs:
+                item_type = getattr(item, "type", None)
+                if isinstance(item_type, str) and item_type == "image_generation_call":
+                    result = getattr(item, "result", None)
+                    if isinstance(result, str) and result:
+                        return result
+                if isinstance(item, dict):
+                    item_type = item.get("type")
+                    if item_type == "image_generation_call":
+                        result = item.get("result")
+                        if isinstance(result, str) and result:
+                            return result
 
-        json_method = getattr(response, "json", None)
-        if callable(json_method):
-            try:
-                payload = json_method()
-            except Exception:
-                payload = None
-            if isinstance(payload, dict):
-                data_list = payload.get("data")
-                if isinstance(data_list, list) and data_list:
-                    first = data_list[0]
-                    if isinstance(first, dict):
-                        b64_data = first.get("b64_json")
-                        if isinstance(b64_data, str) and b64_data:
-                            return b64_data
+        if isinstance(response, dict):  # pragma: no cover - dict fallback
+            outputs = response.get("output")
+            if isinstance(outputs, list):
+                for item in outputs:
+                    if isinstance(item, dict) and item.get("type") == "image_generation_call":
+                        result = item.get("result")
+                        if isinstance(result, str) and result:
+                            return result
         return None
 
     def _handle_generation_success(self, payload: Dict[str, Any]) -> None:
