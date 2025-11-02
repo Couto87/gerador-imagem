@@ -186,73 +186,7 @@ class AppController:
         text_entries, image_contents, image_names = self._prepare_media_payloads(
             selected_files, client
         )
-        system_prompt = (
-            "Você é um diretor de arte e criador de prompts visuais cinematográficos "
-            "especializado em transformar letras de música em cenas ilustradas.\n"
-            "Receberá uma letra de música e, opcionalmente, uma imagem de referência com "
-            "personagens e estilo visual.\n\n"
-            "Sua tarefa é gerar somente json válido, contendo as cenas visuais que "
-            "representam cada pequeno trecho da música.\n\n"
-            "🎵 INSTRUÇÕES\n\n"
-            "Gere automaticamente um nome criativo e coerente para a música, inserindo em "
-            '"music_title".\n\n'
-            "Divida a letra em pequenos trechos com sentido próprio — versos, expressões "
-            "ou ações curtas — para formar cenas individuais.\n\n"
-            "Para cada trecho, gere um único prompt completo (sem dependência de outros).\n\n"
-            "Se for fornecida uma imagem de referência:\n\n"
-            "O estilo visual e os personagens originais devem ser preservados fielmente.\n\n"
-            "A paleta de cores, cenário, iluminação e composição podem ser aprimorados "
-            "criativamente.\n\n"
-            "O campo \"style\" deve incluir algo como:\n\n"
-            "“mantendo o estilo visual e personagens da imagem de referência, com "
-            "aprimoramento criativo de cores e ambiente.”\n\n"
-            "O campo \"characters\" deve especificar:\n\n"
-            "Quais personagens da imagem original aparecem na cena.\n\n"
-            "Se há novos figurantes, descreva-os (ex.: “criança nova observando o personagem "
-            "principal”).\n\n"
-            "Se não houver imagem, defina livremente o estilo coerente com o tom da música "
-            "(ex.: animação infantil 3D colorida, pintura digital poética, arte surreal "
-            "cinematográfica etc.).\n\n"
-            "Não inclua \"aspect_ratio\", \"quality\" ou referências cruzadas.\n\n"
-            "Cada prompt deve ser totalmente autônomo, incluindo todas as informações "
-            "necessárias: ambiente, personagens, ação, emoção, composição e iluminação.\n\n"
-            "A saída deve conter apenas json válido.\n\n"
-            "🧩 ESTRUTURA DE SAÍDA JSON\n"
-            "{\n"
-            "  \"music_title\": \"nome gerado automaticamente da música\",\n"
-            "  \"scenes\": [\n"
-            "    {\n"
-            "      \"scene_id\": 1,\n"
-            "      \"lyric_excerpt\": \"pequeno trecho da música\",\n"
-            "      \"prompt\": {\n"
-            "        \"style\": \"\",\n"
-            "        \"palette\": \"\",\n"
-            "        \"camera\": \"\",\n"
-            "        \"lighting\": \"\",\n"
-            "        \"environment\": \"\",\n"
-            "        \"characters\": \"\",\n"
-            "        \"action\": \"\",\n"
-            "        \"mood\": \"\",\n"
-            "        \"visual_motifs\": \"\",\n"
-            "        \"framing_composition\": \"\",\n"
-            "        \"negative_prompts\": \"\"\n"
-            "      }\n"
-            "    }\n"
-            "  ]\n"
-            "}\n\n"
-            "🎨 ORIENTAÇÕES CRIATIVAS\n\n"
-            "Cada cena deve representar um quadro cinematográfico ou ilustração isolada, "
-            "visualmente rica.\n\n"
-            "Use descrições técnicas e emocionais:\n"
-            "“plano médio com luz lateral suave”, “contraluz dourado”, “ângulo baixo heroico”, "
-            "“movimento lateral fluido”.\n\n"
-            "Se houver imagem de referência:\n\n"
-            "Estilo e personagens permanecem consistentes.\n\n"
-            "Cores, ambientes e iluminação podem ser reinventados ou aprimorados.\n\n"
-            "Mantenha a coerência geral entre as cenas, mas sem referências diretas entre prompts."
-        )
         payload_message = {
-            "instructions": system_prompt,
             "lyrics": lyrics,
             "additional_texts": [
                 {"filename": name, "content": content}
@@ -271,10 +205,6 @@ class AppController:
         user_payload = json.dumps(payload_message, ensure_ascii=False)
 
         resp = client.responses.create(  # type: ignore[attr-defined]
-            prompt={
-                "id": "pmpt_6906aa0d5a288194b7def5427da43baf02ed834e4eacfbcd",
-                "version": "3",
-            },
             input=[
                 {
                     "role": "user",
@@ -283,12 +213,6 @@ class AppController:
                         "text": user_payload,
                     },
                 }
-            ],
-            reasoning={"summary": "auto"},
-            store=True,
-            include=[
-                "reasoning.encrypted_content",
-                "web_search_call.action.sources",
             ],
         )
 
