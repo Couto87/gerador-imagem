@@ -212,13 +212,10 @@ class AppController:
             input=[
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "format": "json",
-                            "text": user_payload,
-                        }
-                    ],
+                    "content": {
+                        "format": "json",
+                        "text": user_payload,
+                    },
                 }
             ],
             reasoning={"summary": "auto"},
