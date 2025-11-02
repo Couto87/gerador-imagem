@@ -5,8 +5,11 @@ import base64
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox
@@ -512,6 +515,9 @@ class AppController:
             and block.get("type") == "input_image"
             and isinstance(block.get("file_id"), str)
         ]
+
+        render_jobs: List[Dict[str, Any]] = []
+
         for index, scene in enumerate(scenes, start=1):
             scene_id = scene.get("scene_id")
             if isinstance(scene_id, int) and scene_id >= 0:
@@ -529,7 +535,9 @@ class AppController:
                 print(f"Cena {prefix} ignorada: prompt vazio ou inválido.")
                 continue
 
-            final_prompt = self._prepare_image_prompt(prompt_text, reference_blocks, client)
+            final_prompt = self._prepare_image_prompt(
+                prompt_text, reference_blocks, client
+            )
 
             request: Dict[str, Any] = {
                 "model": "gpt-image-1",
@@ -541,35 +549,75 @@ class AppController:
             if quality_option:
                 request["quality"] = quality_option
 
-            try:
-                response = client.images.generate(**request)  # type: ignore[attr-defined]
-            except Exception as exc:  # pragma: no cover - API errors
-                print(f"Falha ao gerar a imagem '{file_path.name}': {exc}")
-                continue
+            render_jobs.append({
+                "file_path": file_path,
+                "request": request,
+            })
 
-            b64_data = self._extract_image_base64(response)
-            if not b64_data:
+        self._execute_image_batches(client, render_jobs)
+
+    def _execute_image_batches(
+        self,
+        client: Any,
+        render_jobs: List[Dict[str, Any]],
+        batch_size: int = 5,
+        interval_seconds: int = 70,
+    ) -> None:
+        if not render_jobs:
+            return
+
+        total_jobs = len(render_jobs)
+        for batch_start in range(0, total_jobs, batch_size):
+            batch = render_jobs[batch_start : batch_start + batch_size]
+            with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                futures = {
+                    executor.submit(self._render_image_job, client, job): job
+                    for job in batch
+                }
+                for future in as_completed(futures):
+                    _success, message = future.result()
+                    print(message)
+
+            remaining = total_jobs - (batch_start + len(batch))
+            if remaining > 0:
                 print(
-                    f"Não foi possível obter os dados da imagem para '{file_path.name}'."
+                    "Aguardando 70 segundos antes de iniciar a próxima leva de imagens..."
                 )
-                continue
+                time.sleep(interval_seconds)
 
-            try:
-                image_bytes = base64.b64decode(b64_data)
-            except Exception:
-                print(
-                    f"Os dados de imagem retornados são inválidos para '{file_path.name}'."
-                )
-                continue
+    def _render_image_job(
+        self, client: Any, job: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        file_path = job.get("file_path")
+        request = job.get("request", {})
+        if not isinstance(request, dict) or not isinstance(file_path, Path):
+            return False, "Dados inválidos para renderização da cena."
 
-            try:
-                with open(file_path, "wb") as fh:
-                    fh.write(image_bytes)
-            except OSError:
-                print(f"Não foi possível salvar a imagem: {file_path}")
-                continue
+        try:
+            response = client.images.generate(**dict(request))  # type: ignore[attr-defined]
+        except Exception as exc:  # pragma: no cover - API errors
+            return False, f"Falha ao gerar a imagem '{file_path.name}': {exc}"
 
-            print(f"Imagem gerada: {file_path}")
+        b64_data = self._extract_image_base64(response)
+        if not b64_data:
+            return False, (
+                f"Não foi possível obter os dados da imagem para '{file_path.name}'."
+            )
+
+        try:
+            image_bytes = base64.b64decode(b64_data)
+        except Exception:
+            return False, (
+                f"Os dados de imagem retornados são inválidos para '{file_path.name}'."
+            )
+
+        try:
+            with open(file_path, "wb") as fh:
+                fh.write(image_bytes)
+        except OSError:
+            return False, f"Não foi possível salvar a imagem: {file_path}"
+
+        return True, f"Imagem gerada: {file_path}"
 
     def _resolve_image_generation_settings(self) -> Tuple[str | None, str | None]:
         size_value = self.config_manager.get("image", "size", "auto")
