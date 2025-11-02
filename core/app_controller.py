@@ -1,6 +1,7 @@
 """High level controller that wires managers and the UI together."""
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -51,6 +52,7 @@ class _GenerationWorker(QObject):
             payload = self._controller._request_storyboard(
                 self._prompt, self._selected_files
             )
+            self._controller._save_storyboard_files(payload)
         except Exception as exc:  # pragma: no cover - worker thread feedback
             self.failed.emit(str(exc))
             return
@@ -494,6 +496,9 @@ class AppController:
             )
             return
 
+        size_option, quality_option = self._resolve_image_generation_settings()
+
+        client = self._ensure_client()
         scenes: List[Dict[str, Any]] = payload.get("scenes", []) or []
         for index, scene in enumerate(scenes, start=1):
             scene_id = scene.get("scene_id")
@@ -504,12 +509,166 @@ class AppController:
 
             lyric_excerpt = str(scene.get("lyric_excerpt", "")).strip()
             excerpt_component = self._sanitize_filename_component(lyric_excerpt)
-            filename = f"{prefix} {excerpt_component}.txt"
+            filename = f"{prefix} {excerpt_component}.png"
             file_path = target_dir / filename
+
+            prompt_text = self._build_image_prompt(lyric_excerpt, scene.get("prompt"))
+            if not prompt_text:
+                print(f"Cena {prefix} ignorada: prompt vazio ou inválido.")
+                continue
+
+            request: Dict[str, Any] = {
+                "model": "gpt-image-1",
+                "prompt": prompt_text,
+                "background": "transparent",
+            }
+            if size_option:
+                request["size"] = size_option
+            if quality_option:
+                request["quality"] = quality_option
+
             try:
-                file_path.write_text("", encoding="utf-8")
+                response = client.images.generate(**request)  # type: ignore[attr-defined]
+            except Exception as exc:  # pragma: no cover - API errors
+                print(f"Falha ao gerar a imagem '{file_path.name}': {exc}")
+                continue
+
+            b64_data = self._extract_image_base64(response)
+            if not b64_data:
+                print(
+                    f"Não foi possível obter os dados da imagem para '{file_path.name}'."
+                )
+                continue
+
+            try:
+                image_bytes = base64.b64decode(b64_data)
+            except Exception:
+                print(
+                    f"Os dados de imagem retornados são inválidos para '{file_path.name}'."
+                )
+                continue
+
+            try:
+                with open(file_path, "wb") as fh:
+                    fh.write(image_bytes)
             except OSError:
-                print(f"Não foi possível criar o arquivo: {file_path}")
+                print(f"Não foi possível salvar a imagem: {file_path}")
+                continue
+
+            print(f"Imagem gerada: {file_path}")
+
+    def _resolve_image_generation_settings(self) -> Tuple[str | None, str | None]:
+        size_value = self.config_manager.get("image", "size", "auto")
+        quality_value = self.config_manager.get("image", "resolution", "auto")
+        return (
+            self._normalize_size_option(size_value),
+            self._normalize_quality_option(quality_value),
+        )
+
+    def _normalize_size_option(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        lowered = cleaned.lower().replace("×", "x")
+        if "auto" in lowered:
+            return None
+        mapping = {
+            "1024x1024 (quadrado)": "1024x1024",
+            "1536x1024 (paisagem)": "1536x1024",
+            "1024x1536 (retrato)": "1024x1536",
+            "1024x1024": "1024x1024",
+            "1536x1024": "1536x1024",
+            "1024x1536": "1024x1536",
+            "1080x1350 (retrato)": "1024x1536",
+            "1080x1920 (vertical/short)": "1024x1536",
+            "1920x1080 (paisagem)": "1536x1024",
+        }
+        if lowered in mapping:
+            return mapping[lowered]
+        match = re.search(r"(\d{3,4})x(\d{3,4})", lowered)
+        if match:
+            candidate = f"{match.group(1)}x{match.group(2)}"
+            if candidate in {"1024x1024", "1536x1024", "1024x1536"}:
+                return candidate
+        return None
+
+    def _normalize_quality_option(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip().lower()
+        if not cleaned or "auto" in cleaned:
+            return None
+        mapping = {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "baixa": "low",
+            "média": "medium",
+            "media": "medium",
+            "alta": "high",
+        }
+        normalized = mapping.get(cleaned, cleaned)
+        return normalized if normalized in {"low", "medium", "high"} else None
+
+    def _build_image_prompt(self, lyric_excerpt: str, prompt_data: Any) -> str:
+        lines: List[str] = []
+        excerpt = lyric_excerpt.strip()
+        if excerpt:
+            lines.append(f"Trecho da música: {excerpt}")
+
+        if isinstance(prompt_data, dict):
+            for key, value in prompt_data.items():
+                if value is None:
+                    continue
+                if isinstance(value, (list, tuple)):
+                    value_str = ", ".join(str(item) for item in value if item is not None)
+                else:
+                    value_str = str(value)
+                if value_str:
+                    lines.append(f"{key}: {value_str}")
+        elif prompt_data:
+            lines.append(str(prompt_data))
+
+        if lines:
+            return "\n".join(lines)
+
+        if excerpt:
+            return excerpt
+
+        try:
+            return json.dumps({"prompt": prompt_data}, ensure_ascii=False)
+        except TypeError:
+            return ""
+
+    def _extract_image_base64(self, response: Any) -> str | None:
+        data = getattr(response, "data", None)
+        if isinstance(data, list) and data:
+            first = data[0]
+            b64_data = getattr(first, "b64_json", None)
+            if isinstance(b64_data, str) and b64_data:
+                return b64_data
+            if isinstance(first, dict):
+                maybe_data = first.get("b64_json")
+                if isinstance(maybe_data, str) and maybe_data:
+                    return maybe_data
+
+        json_method = getattr(response, "json", None)
+        if callable(json_method):
+            try:
+                payload = json_method()
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                data_list = payload.get("data")
+                if isinstance(data_list, list) and data_list:
+                    first = data_list[0]
+                    if isinstance(first, dict):
+                        b64_data = first.get("b64_json")
+                        if isinstance(b64_data, str) and b64_data:
+                            return b64_data
+        return None
 
     def _handle_generation_success(self, payload: Dict[str, Any]) -> None:
         elapsed_message = None
@@ -522,7 +681,6 @@ class AppController:
         self._finalize_generation_thread()
 
         self._print_storyboard(payload)
-        self._save_storyboard_files(payload)
         QMessageBox.information(
             self.window,
             "Geração concluída",

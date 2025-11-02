@@ -14,8 +14,8 @@ CONFIG_FILE_NAME = ".image_studio_config.json"
 def _default_config() -> Dict[str, Any]:
     return {
         "image": {
-            "size": "1024 × 1024 (Quadrado)",
-            "resolution": "Baixa",
+            "size": "auto",
+            "resolution": "auto",
             "quantity": 1,
             "type": "Imagem",
         },
