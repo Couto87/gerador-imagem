@@ -716,16 +716,16 @@ class AppController:
         if not reference_blocks:
             return prompt_text
 
-        content_blocks: List[Dict[str, Any]] = [
-            {"type": "input_text", "text": prompt_text},
-        ]
-        content_blocks.extend(
-            {"type": block["type"], "file_id": block["file_id"]}
+        image_blocks: List[Dict[str, Any]] = [
+            {
+                "type": "input_image",
+                "file_id": block["file_id"],
+            }
             for block in reference_blocks
             if block.get("type") == "input_image" and block.get("file_id")
-        )
+        ]
 
-        if len(content_blocks) == 1:
+        if not image_blocks:
             return prompt_text
 
         try:
@@ -734,7 +734,10 @@ class AppController:
                 input=[
                     {
                         "role": "user",
-                        "content": content_blocks,
+                        "content": [
+                            {"type": "input_text", "text": prompt_text},
+                            *image_blocks,
+                        ],
                     }
                 ],
             )
