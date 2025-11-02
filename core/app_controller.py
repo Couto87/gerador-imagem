@@ -119,6 +119,7 @@ class AppController:
             return
 
         self._print_storyboard(payload)
+        self._save_storyboard_files(payload)
         QMessageBox.information(
             self.window,
             "Geração concluída",
@@ -434,4 +435,49 @@ class AppController:
             print("3.3 - Prompt:")
             print(formatted_prompt)
             print("-" * 40)
+
+    # Output helpers ---------------------------------------------------
+    def _sanitize_filename_component(self, value: str) -> str:
+        value = value.replace("\n", " ").replace("\r", " ")
+        value = " ".join(value.split())
+        sanitized = re.sub(r"[\\/:*?\"<>|]", "_", value).strip(" _")
+        if len(sanitized) > 80:
+            sanitized = sanitized[:80].rstrip(" _")
+        return sanitized or "sem_nome"
+
+    def _save_storyboard_files(self, payload: Dict[str, Any]) -> None:
+        if self.output_directory is None:
+            print(
+                "Nenhuma pasta de destino configurada. Os arquivos de cenas não foram criados."
+            )
+            return
+
+        music_title = str(payload.get("music_title", "")).strip()
+        folder_name = self._sanitize_filename_component(music_title or "sem_titulo")
+        target_dir = self.output_directory / folder_name
+
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            print(
+                "Não foi possível criar a pasta de destino para salvar as cenas geradas."
+            )
+            return
+
+        scenes: List[Dict[str, Any]] = payload.get("scenes", []) or []
+        for index, scene in enumerate(scenes, start=1):
+            scene_id = scene.get("scene_id")
+            if isinstance(scene_id, int) and scene_id >= 0:
+                prefix = f"{scene_id:03d}"
+            else:
+                prefix = f"{index:03d}"
+
+            lyric_excerpt = str(scene.get("lyric_excerpt", "")).strip()
+            excerpt_component = self._sanitize_filename_component(lyric_excerpt)
+            filename = f"{prefix} {excerpt_component}.txt"
+            file_path = target_dir / filename
+            try:
+                file_path.write_text("", encoding="utf-8")
+            except OSError:
+                print(f"Não foi possível criar o arquivo: {file_path}")
 
