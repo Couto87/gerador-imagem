@@ -205,6 +205,10 @@ class AppController:
         user_payload = json.dumps(payload_message, ensure_ascii=False)
 
         resp = client.responses.create(  # type: ignore[attr-defined]
+            prompt={
+                "id": "pmpt_6906aa0d5a288194b7def5427da43baf02ed834e4eacfbcd",
+                "version": "3",
+            },
             input=[
                 {
                     "role": "user",
@@ -213,6 +217,12 @@ class AppController:
                         "text": user_payload,
                     },
                 }
+            ],
+            reasoning={"summary": "auto"},
+            store=True,
+            include=[
+                "reasoning.encrypted_content",
+                "web_search_call.action.sources",
             ],
         )
 
