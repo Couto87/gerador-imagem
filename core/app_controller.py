@@ -186,20 +186,6 @@ class AppController:
         text_entries, image_contents, image_names = self._prepare_media_payloads(
             selected_files, client
         )
-        user_sections: List[str] = [f"Letra fornecida pelo usuário:\n{lyrics}"]
-        if text_entries:
-            for name, content in text_entries:
-                user_sections.append(
-                    f"Conteúdo adicional do arquivo {name}:\n{content}"
-                )
-        if image_names:
-            user_sections.append(
-                "As imagens anexadas devem servir como referência visual. "
-                f"Arquivos: {', '.join(image_names)}."
-            )
-        user_text = "\n\n".join(user_sections)
-        content_parts: List[Dict[str, Any]] = [{"type": "input_text", "text": user_text}]
-        content_parts.extend(image_contents)
         system_prompt = (
             "Você é um diretor de arte e criador de prompts visuais cinematográficos "
             "especializado em transformar letras de música em cenas ilustradas.\n"
@@ -265,20 +251,45 @@ class AppController:
             "Cores, ambientes e iluminação podem ser reinventados ou aprimorados.\n\n"
             "Mantenha a coerência geral entre as cenas, mas sem referências diretas entre prompts."
         )
+        payload_message = {
+            "instructions": system_prompt,
+            "lyrics": lyrics,
+            "additional_texts": [
+                {"filename": name, "content": content}
+                for name, content in text_entries
+            ],
+            "image_references": [
+                {
+                    "filename": name,
+                    **content,
+                }
+                for name, content in zip(image_names, image_contents)
+            ],
+            "image_names": image_names,
+        }
+
+        user_payload = json.dumps(payload_message, ensure_ascii=False)
 
         resp = client.responses.create(  # type: ignore[attr-defined]
-            model="gpt-5",
+            prompt={
+                "id": "pmpt_6906aa0d5a288194b7def5427da43baf02ed834e4eacfbcd",
+                "version": "3",
+            },
             input=[
                 {
                     "role": "user",
-                    "content": content_parts,
+                    "content": {
+                        "format": "json",
+                        "text": user_payload,
+                    },
                 }
             ],
-            instructions=system_prompt,
-            text={
-                "format": {"type": "json_object"},
-                "verbosity": "medium",
-            },
+            reasoning={"summary": "auto"},
+            store=True,
+            include=[
+                "reasoning.encrypted_content",
+                "web_search_call.action.sources",
+            ],
         )
 
         content = getattr(resp, "output_text", None)
@@ -309,7 +320,13 @@ class AppController:
             elif suffix in IMAGE_EXTENSIONS:
                 file_id = self._ensure_openai_file_id(path, client)
                 if file_id:
-                    image_contents.append({"type": "input_image", "file_id": file_id})
+                    image_contents.append(
+                        {
+                            "file_id": file_id,
+                            "type": "image_url",
+                            "image_url": {"url": f"file_id:{file_id}"},
+                        }
+                    )
                     image_names.append(path.name)
         return text_entries, image_contents, image_names
 
