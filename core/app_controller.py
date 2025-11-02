@@ -18,6 +18,11 @@ except Exception:  # pragma: no cover - handled gracefully during runtime
     OpenAI = None  # type: ignore
 
 try:  # pragma: no cover - optional dependency import guard
+    from dotenv import load_dotenv  # type: ignore
+except Exception:  # pragma: no cover - handled gracefully during runtime
+    load_dotenv = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency import guard
     from PIL import Image, PngImagePlugin  # type: ignore
 except Exception:  # pragma: no cover - optional dependency import guard
     Image = None  # type: ignore
@@ -171,6 +176,8 @@ class AppController:
             )
 
         if self._openai_client is None:
+            if callable(load_dotenv):
+                load_dotenv()
             api_key = os.getenv("OPENAI_API_KEY", "").strip()
             if not api_key:
                 raise ValueError(
@@ -202,7 +209,12 @@ class AppController:
             "image_names": image_names,
         }
 
-        user_payload = json.dumps(payload_message, ensure_ascii=False)
+        wrapped_payload = {
+            "tipo": "json",
+            "conteudo": payload_message,
+        }
+
+        user_payload = json.dumps(wrapped_payload, ensure_ascii=False)
 
         resp = client.responses.create(  # type: ignore[attr-defined]
             prompt={
