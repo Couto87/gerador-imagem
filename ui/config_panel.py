@@ -1,6 +1,7 @@
 """Panel with generation options."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Dict, Iterable
 
@@ -38,13 +39,20 @@ class ConfigPanel(QWidget):
 
         self.sizeCombo = self._create_combo(
             [
-                "1080 × 1350 (Retrato)",
-                "1024 × 1024 (Quadrado)",
-                "1920 × 1080 (Paisagem)",
-                "1080 × 1920 (Vertical/Short)",
+                ("1024x1024 (quadrado)", "1024x1024"),
+                ("1536x1024 (paisagem)", "1536x1024"),
+                ("1024x1536 (retrato)", "1024x1536"),
+                ("auto (padrão)", "auto"),
             ]
         )
-        self.resolutionCombo = self._create_combo(["Baixa", "Média", "Alta"])
+        self.resolutionCombo = self._create_combo(
+            [
+                ("low", "low"),
+                ("medium", "medium"),
+                ("high", "high"),
+                ("auto (padrão)", "auto"),
+            ]
+        )
         self.typeCombo = self._create_combo(["Imagem", "Música"])
 
         quantityBox = QSpinBox()
@@ -95,11 +103,15 @@ class ConfigPanel(QWidget):
         layout.addLayout(form)
         layout.addStretch(1)
 
-        self.sizeCombo.currentTextChanged.connect(
-            lambda text: self.optionChanged.emit("image", "size", text)
+        self.sizeCombo.currentIndexChanged.connect(
+            lambda index: self.optionChanged.emit(
+                "image", "size", self._combo_value(self.sizeCombo, index)
+            )
         )
-        self.resolutionCombo.currentTextChanged.connect(
-            lambda text: self.optionChanged.emit("image", "resolution", text)
+        self.resolutionCombo.currentIndexChanged.connect(
+            lambda index: self.optionChanged.emit(
+                "image", "resolution", self._combo_value(self.resolutionCombo, index)
+            )
         )
         self.typeCombo.currentTextChanged.connect(
             lambda text: self.optionChanged.emit("image", "type", text)
@@ -112,10 +124,14 @@ class ConfigPanel(QWidget):
                 QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             )
 
-    def _create_combo(self, items: Iterable[str]) -> QComboBox:
+    def _create_combo(self, items: Iterable[tuple[str, object] | str]) -> QComboBox:
         combo = QComboBox()
         for item in items:
-            combo.addItem(item)
+            if isinstance(item, tuple):
+                text, value = item
+                combo.addItem(text, value)
+            else:
+                combo.addItem(item)
         return combo
 
     def apply_config(self, data: Dict[str, object]) -> None:
@@ -125,14 +141,12 @@ class ConfigPanel(QWidget):
         item_type = data.get("type")
 
         if isinstance(size, str):
-            index = self.sizeCombo.findText(size)
-            if index >= 0:
-                self.sizeCombo.setCurrentIndex(index)
+            normalized = self._normalize_size_value(size)
+            self._set_combo_index_by_value(self.sizeCombo, normalized)
 
         if isinstance(resolution, str):
-            index = self.resolutionCombo.findText(resolution)
-            if index >= 0:
-                self.resolutionCombo.setCurrentIndex(index)
+            normalized = self._normalize_resolution_value(resolution)
+            self._set_combo_index_by_value(self.resolutionCombo, normalized)
 
         if isinstance(quantity, int):
             self.quantityBox.setValue(quantity)
@@ -164,3 +178,62 @@ class ConfigPanel(QWidget):
             self.destinationLabel.setText("Nenhuma pasta selecionada.")
         else:
             self.set_output_folder(self._destination_path)
+
+    def _combo_value(self, combo: QComboBox, index: int) -> object:
+        value = combo.itemData(index)
+        if value is None:
+            return combo.itemText(index)
+        return value
+
+    def _set_combo_index_by_value(self, combo: QComboBox, value: str) -> None:
+        index = self._find_index_by_data(combo, value)
+        if index < 0 and isinstance(value, str):
+            index = combo.findText(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _find_index_by_data(self, combo: QComboBox, value: object) -> int:
+        for idx in range(combo.count()):
+            if combo.itemData(idx) == value:
+                return idx
+        return -1
+
+    def _normalize_size_value(self, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            return "auto"
+        lowered = cleaned.lower().replace("×", "x")
+        mapping = {
+            "1024x1024 (quadrado)": "1024x1024",
+            "1536x1024 (paisagem)": "1536x1024",
+            "1024x1536 (retrato)": "1024x1536",
+            "auto (padrão)": "auto",
+            "auto": "auto",
+            "1024x1024": "1024x1024",
+            "1536x1024": "1536x1024",
+            "1024x1536": "1024x1536",
+            "1080x1350 (retrato)": "1024x1536",
+            "1080x1920 (vertical/short)": "1024x1536",
+            "1920x1080 (paisagem)": "1536x1024",
+        }
+        if lowered in mapping:
+            return mapping[lowered]
+        match = re.search(r"(\d{3,4})x(\d{3,4})", lowered)
+        if match:
+            return f"{match.group(1)}x{match.group(2)}"
+        return cleaned
+
+    def _normalize_resolution_value(self, value: str) -> str:
+        cleaned = value.strip().lower()
+        mapping = {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "auto": "auto",
+            "auto (padrão)": "auto",
+            "baixa": "low",
+            "média": "medium",
+            "media": "medium",
+            "alta": "high",
+        }
+        return mapping.get(cleaned, cleaned)
